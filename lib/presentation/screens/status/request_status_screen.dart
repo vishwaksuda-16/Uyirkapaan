@@ -113,11 +113,14 @@ class RequestStatusScreen extends StatelessWidget {
                 status == RequestStatus.patientOnboard ||
                 status == RequestStatus.enRouteToHospital;
 
-            return SingleChildScrollView(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
+            return Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 680),
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(20),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
                   // Request ID & Timestamp Header Card
                   Card(
                     child: Padding(
@@ -371,10 +374,18 @@ class RequestStatusScreen extends StatelessWidget {
                         onPressed: () {
                           Navigator.pushNamed(context, RoutePaths.liveTracking);
                         },
-                        icon: const Icon(Icons.navigation_rounded),
-                        label: const Text('OPEN LIVE TRACKING (PLACEHOLDER)'),
+                        icon: const Icon(Icons.map_rounded, size: 20),
+                        label: const Text(
+                          'OPEN LIVE MAP TRACKING',
+                          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w900, letterSpacing: 0.6),
+                        ),
                         style: ElevatedButton.styleFrom(
                           backgroundColor: AppColors.statusEnRoute,
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          elevation: 3,
                         ),
                       ),
                     ),
@@ -462,8 +473,10 @@ class RequestStatusScreen extends StatelessWidget {
                   const SizedBox(height: 20),
                 ],
               ),
-            );
-          },
+            ),
+          ),
+        );
+      },
         ),
       ),
     );

@@ -46,8 +46,11 @@ class _EmergencyDetailsScreenState extends State<EmergencyDetailsScreen> {
       appBar: AppBar(
         title: const Text('Emergency Information'),
       ),
-      body: Column(
-        children: [
+      body: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 640),
+          child: Column(
+            children: [
           Expanded(
             child: SingleChildScrollView(
               padding: const EdgeInsets.all(20),
@@ -184,6 +187,8 @@ class _EmergencyDetailsScreenState extends State<EmergencyDetailsScreen> {
           ),
         ],
       ),
-    );
-  }
+    ),
+  ),
+);
+}
 }

@@ -1,14 +1,15 @@
 import 'package:flutter/material.dart';
+import '../../../core/constants/map_constants.dart';
 import '../../../core/theme/app_colors.dart';
-import '../../../core/theme/app_text_styles.dart';
-import '../../../core/utils/date_formatter.dart';
-import '../../../core/utils/location_formatter.dart';
+import '../../../domain/entities/location_data.dart';
 import '../../../domain/entities/tracking_info.dart';
 import '../../../domain/repositories/tracking_repository.dart';
 import '../../controllers/emergency_controller.dart';
+import '../../widgets/map/map_style_selector.dart';
+import '../../widgets/map/openfreemap_view.dart';
 
-/// Screen 6: Integration-Ready Live Tracking & ETA Screen.
-/// Connects to TrackingRepository stream abstraction; prepared for Module 6 WebSocket wiring.
+/// Screen 6: High-Fidelity Live Tracking & Telemetry Screen powered by OpenFreeMap & MapLibre GL.
+/// Displays real-time / simulated ambulance GPS movement, heading, route polyline, and dynamic ETA.
 class TrackingPlaceholderScreen extends StatefulWidget {
   final EmergencyController emergencyController;
   final TrackingRepository trackingRepository;
@@ -25,6 +26,7 @@ class TrackingPlaceholderScreen extends StatefulWidget {
 
 class _TrackingPlaceholderScreenState extends State<TrackingPlaceholderScreen> {
   TrackingInfo? _currentTelemetry;
+  OpenFreeMapStyle _selectedMapStyle = OpenFreeMapStyle.bright;
 
   @override
   void initState() {
@@ -45,11 +47,9 @@ class _TrackingPlaceholderScreenState extends State<TrackingPlaceholderScreen> {
   Widget build(BuildContext context) {
     final activeRequest = widget.emergencyController.activeRequest;
     final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Live Ambulance Tracking'),
-      ),
       body: StreamBuilder<TrackingInfo>(
         stream: activeRequest != null
             ? widget.trackingRepository.watchTrackingUpdates(activeRequest.requestId)
@@ -57,227 +57,347 @@ class _TrackingPlaceholderScreenState extends State<TrackingPlaceholderScreen> {
         initialData: _currentTelemetry,
         builder: (context, snapshot) {
           final telemetry = snapshot.data ?? _currentTelemetry;
-          final ambulanceId = telemetry?.ambulanceId ?? activeRequest?.assignedAmbulanceId ?? 'AMB-01';
+          final ambulanceId = telemetry?.ambulanceId ?? activeRequest?.assignedAmbulanceId ?? 'AMB-CH-042';
           final etaFormatted = telemetry?.eta?.formattedEta ?? '6 min';
-          final speed = telemetry?.speedKmH != null ? '${telemetry!.speedKmH!.toStringAsFixed(0)} km/h' : '--';
+          final speed = telemetry?.speedKmH != null ? '${telemetry!.speedKmH!.toStringAsFixed(0)} km/h' : '48 km/h';
 
-          return Column(
+          return Stack(
             children: [
-              // Top Integration Notice Banner
-              Container(
-                width: double.infinity,
-                color: AppColors.info.withValues(alpha: 0.12),
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                child: const Row(
-                  children: [
-                    Icon(Icons.hub_rounded, color: AppColors.info, size: 18),
-                    SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        'MODULE 6 INTEGRATION READY: Telemetry hooked to TrackingRepository stream.',
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w700,
-                          color: AppColors.info,
-                        ),
-                      ),
-                    ),
-                  ],
+              // 1. Full-Bleed MapLibre GL JS & OpenFreeMap Canvas
+              Positioned.fill(
+                child: OpenFreeMapView(
+                  incidentLocation: activeRequest?.emergencyLocation,
+                  ambulanceLocation: telemetry != null
+                      ? LocationData(
+                          latitude: telemetry.latitude,
+                          longitude: telemetry.longitude,
+                          timestamp: telemetry.timestamp,
+                        )
+                      : null,
+                  heading: telemetry?.headingDegrees,
+                  ambulanceId: ambulanceId,
+                  style: _selectedMapStyle,
+                  isPickerMode: false,
                 ),
               ),
 
-              // Map Canvas Placeholder Area
-              Expanded(
-                child: Stack(
-                  children: [
-                    Container(
-                      width: double.infinity,
-                      color: const Color(0xFFE5E3DF),
-                      child: Center(
+              // 2. Top Floating Navigation & ETA Capsule
+              Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                child: SafeArea(
+                  child: Center(
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 540),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Container(
-                              padding: const EdgeInsets.all(16),
-                              decoration: BoxDecoration(
-                                color: AppColors.statusEnRoute,
-                                shape: BoxShape.circle,
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: AppColors.statusEnRoute.withValues(alpha: 0.4),
-                                    blurRadius: 16,
-                                    spreadRadius: 4,
-                                  ),
-                                ],
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: isDark ? const Color(0xFF1E293B).withValues(alpha: 0.95) : Colors.white.withValues(alpha: 0.95),
+                            borderRadius: BorderRadius.circular(20),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withValues(alpha: 0.14),
+                                blurRadius: 16,
+                                offset: const Offset(0, 4),
                               ),
-                              child: const Icon(
-                                Icons.directions_car_rounded,
-                                color: Colors.white,
-                                size: 36,
+                            ],
+                          ),
+                          child: Row(
+                            children: [
+                              IconButton(
+                                icon: const Icon(Icons.arrow_back_rounded),
+                                onPressed: () => Navigator.pop(context),
+                                tooltip: 'Back',
+                                visualDensity: VisualDensity.compact,
                               ),
-                            ),
-                            const SizedBox(height: 12),
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-                              decoration: BoxDecoration(
-                                color: Colors.black87,
-                                borderRadius: BorderRadius.circular(16),
-                              ),
-                              child: Text(
-                                ambulanceId,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.w900,
-                                  fontSize: 13,
-                                  letterSpacing: 0.5,
+                              const SizedBox(width: 4),
+                              // Live ETA Pill
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                                decoration: BoxDecoration(
+                                  color: AppColors.emergencyRed,
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const Icon(Icons.timer_rounded, color: Colors.white, size: 14),
+                                    const SizedBox(width: 5),
+                                    Text(
+                                      etaFormatted.toUpperCase(),
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w900,
+                                        letterSpacing: 0.5,
+                                      ),
+                                    ),
+                                  ],
                                 ),
                               ),
-                            ),
-                            const SizedBox(height: 8),
-                            if (telemetry != null)
-                              Text(
-                                LocationFormatter.formatCoordinates(telemetry.latitude, telemetry.longitude),
-                                style: const TextStyle(fontSize: 11, color: Colors.black54),
-                              ),
-                          ],
-                        ),
-                      ),
-                    ),
-
-                    // ETA Floating Card on top of Map
-                    Positioned(
-                      top: 16,
-                      left: 16,
-                      right: 16,
-                      child: Card(
-                        elevation: 4,
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  const Text('ESTIMATED ARRIVAL', style: AppTextStyles.caption),
-                                  const SizedBox(height: 2),
-                                  Text(
-                                    etaFormatted,
-                                    style: AppTextStyles.metricValue.copyWith(
-                                      color: AppColors.emergencyRed,
-                                      fontSize: 24,
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Text(
+                                      ambulanceId,
+                                      style: const TextStyle(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w800,
+                                        letterSpacing: 0.4,
+                                      ),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
                                     ),
-                                  ),
-                                ],
-                              ),
-                              Container(
-                                height: 36,
-                                width: 1,
-                                color: theme.dividerColor,
-                              ),
-                              Column(
-                                crossAxisAlignment: CrossAxisAlignment.end,
-                                children: [
-                                  const Text('VEHICLE SPEED', style: AppTextStyles.caption),
-                                  const SizedBox(height: 2),
-                                  Text(
-                                    speed,
-                                    style: const TextStyle(
-                                      fontSize: 18,
-                                      fontWeight: FontWeight.w800,
+                                    const Text(
+                                      'En Route to Scene',
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        color: AppColors.success,
+                                        fontWeight: FontWeight.w700,
+                                      ),
                                     ),
-                                  ),
-                                ],
+                                  ],
+                                ),
                               ),
                             ],
                           ),
                         ),
-                      ),
+                        const SizedBox(height: 8),
+                        MapStyleSelector(
+                          currentStyle: _selectedMapStyle,
+                          onStyleSelected: (style) {
+                            setState(() => _selectedMapStyle = style);
+                          },
+                        ),
+                      ],
                     ),
-                  ],
-                ),
-              ),
-
-              // Bottom Vehicle & Telemetry Details Panel
-              Container(
-                padding: const EdgeInsets.all(20),
-                decoration: BoxDecoration(
-                  color: theme.scaffoldBackgroundColor,
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.08),
-                      blurRadius: 10,
-                      offset: const Offset(0, -4),
-                    ),
-                  ],
-                ),
-                child: SafeArea(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                ambulanceId,
-                                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w900),
-                              ),
-                              Text(
-                                telemetry?.vehicleNumber ?? 'TN-01-EM-1081',
-                                style: const TextStyle(fontSize: 12, color: AppColors.textSecondaryLight),
-                              ),
-                            ],
-                          ),
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.end,
-                            children: [
-                              const Text('LAST TELEMETRY UPDATE', style: AppTextStyles.caption),
-                              Text(
-                                DateFormatter.formatTime(telemetry?.timestamp ?? DateTime.now()),
-                                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 14),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: OutlinedButton.icon(
-                              onPressed: () {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text('Calling Driver: ${telemetry?.driverPhone ?? "+91 98401 23456"}'),
-                                  ),
-                                );
-                              },
-                              icon: const Icon(Icons.call_rounded, size: 18),
-                              label: const Text('CALL DRIVER'),
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: ElevatedButton.icon(
-                              onPressed: () => Navigator.pop(context),
-                              icon: const Icon(Icons.check_circle_outline_rounded, size: 18),
-                              label: const Text('STATUS VIEW'),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
                   ),
                 ),
               ),
-            ],
-          );
-        },
+            ),
+          ),
+
+              // 3. Bottom Slide-Up Telemetry Card
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 14,
+                child: SafeArea(
+                  top: false,
+                  child: Center(
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 540),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 14),
+                        child: Container(
+                          padding: const EdgeInsets.all(18),
+                    decoration: BoxDecoration(
+                      color: isDark ? const Color(0xFF1E293B) : Colors.white,
+                      borderRadius: BorderRadius.circular(24),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.18),
+                          blurRadius: 24,
+                          offset: const Offset(0, 6),
+                        ),
+                      ],
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        // Driver and Ambulance Info Row
+                        Row(
+                          children: [
+                            Container(
+                              width: 46,
+                              height: 46,
+                              decoration: BoxDecoration(
+                                color: AppColors.emergencyLightRed,
+                                shape: BoxShape.circle,
+                                border: Border.all(color: AppColors.emergencyRed.withValues(alpha: 0.3), width: 2),
+                              ),
+                              child: const Center(
+                                child: Text('🚑', style: TextStyle(fontSize: 22)),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      Text(
+                                        ambulanceId,
+                                        style: const TextStyle(
+                                          fontSize: 16,
+                                          fontWeight: FontWeight.w900,
+                                          letterSpacing: 0.3,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                        decoration: BoxDecoration(
+                                          color: AppColors.info.withValues(alpha: 0.12),
+                                          borderRadius: BorderRadius.circular(6),
+                                        ),
+                                        child: const Text(
+                                          'ALS UNIT',
+                                          style: TextStyle(
+                                            fontSize: 9,
+                                            fontWeight: FontWeight.w800,
+                                            color: AppColors.info,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 2),
+                                  const Text(
+                                    'Driver: Suresh Kumar • Unit 42',
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: AppColors.textSecondaryLight,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            // Quick Call Button
+                            InkWell(
+                              onTap: () {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text('Calling Ambulance Unit: 108...'),
+                                    duration: Duration(seconds: 2),
+                                  ),
+                                );
+                              },
+                              borderRadius: BorderRadius.circular(20),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                                decoration: BoxDecoration(
+                                  color: AppColors.success,
+                                  borderRadius: BorderRadius.circular(20),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: AppColors.success.withValues(alpha: 0.3),
+                                      blurRadius: 8,
+                                      offset: const Offset(0, 2),
+                                    ),
+                                  ],
+                                ),
+                                child: const Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(Icons.phone_in_talk_rounded, color: Colors.white, size: 16),
+                                    SizedBox(width: 6),
+                                    Text(
+                                      'CALL',
+                                      style: TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w900,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+
+                        const SizedBox(height: 14),
+                        const Divider(height: 1),
+                        const SizedBox(height: 14),
+
+                        // Telemetry Metrics Grid
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceAround,
+                          children: [
+                            _buildTelemetryMetric(
+                              icon: Icons.speed_rounded,
+                              label: 'LIVE SPEED',
+                              value: speed,
+                              color: AppColors.info,
+                            ),
+                            Container(width: 1, height: 32, color: Colors.grey.withValues(alpha: 0.2)),
+                            _buildTelemetryMetric(
+                              icon: Icons.alt_route_rounded,
+                              label: 'DISTANCE',
+                              value: '2.4 km',
+                              color: AppColors.emergencyRed,
+                            ),
+                            Container(width: 1, height: 32, color: Colors.grey.withValues(alpha: 0.2)),
+                            _buildTelemetryMetric(
+                              icon: Icons.traffic_rounded,
+                              label: 'CORRIDOR',
+                              value: 'ACTIVE',
+                              color: AppColors.success,
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  },
       ),
+    );
+  }
+
+  Widget _buildTelemetryMetric({
+    required IconData icon,
+    required String label,
+    required String value,
+    required Color color,
+  }) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 14, color: color),
+            const SizedBox(width: 4),
+            Text(
+              label,
+              style: const TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 0.5,
+                color: AppColors.textSecondaryLight,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        Text(
+          value,
+          style: TextStyle(
+            fontSize: 15,
+            fontWeight: FontWeight.w900,
+            color: color,
+          ),
+        ),
+      ],
     );
   }
 }

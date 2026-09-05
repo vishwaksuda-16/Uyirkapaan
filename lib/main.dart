@@ -24,8 +24,8 @@ void main() async {
   final localDataSource = RequestLocalDataSourceImpl();
 
   // 2. Initialize Data Sources
-  final mockRequestDataSource = MockEmergencyRequestDataSource();
   final mockTrackingDataSource = MockTrackingDataSource();
+  final mockRequestDataSource = MockEmergencyRequestDataSource(trackingDataSource: mockTrackingDataSource);
 
   final httpClient = http.Client();
   final remoteRequestDataSource = RemoteEmergencyRequestDataSource(client: httpClient);
@@ -57,6 +57,9 @@ void main() async {
   runApp(UyirKappanBystanderApp(appRouter: appRouter));
 }
 
+/// Global ValueNotifier for toggling between Light and Dark mode across the application.
+final ValueNotifier<ThemeMode> appThemeModeNotifier = ValueNotifier<ThemeMode>(ThemeMode.light);
+
 /// Root Application Widget for UyirKappan Module 1 (Bystander App).
 class UyirKappanBystanderApp extends StatelessWidget {
   final AppRouter appRouter;
@@ -68,14 +71,22 @@ class UyirKappanBystanderApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'UyirKappan — Bystander Emergency Response',
-      debugShowCheckedModeBanner: false,
-      theme: AppTheme.lightTheme,
-      darkTheme: AppTheme.darkTheme,
-      themeMode: ThemeMode.system,
-      initialRoute: RoutePaths.home,
-      onGenerateRoute: appRouter.onGenerateRoute,
+    return ValueListenableBuilder<ThemeMode>(
+      valueListenable: appThemeModeNotifier,
+      builder: (context, themeMode, _) {
+        return MaterialApp(
+          title: 'UyirKappan — Bystander Emergency Response',
+          debugShowCheckedModeBanner: false,
+          theme: AppTheme.lightTheme,
+          darkTheme: AppTheme.darkTheme,
+          themeMode: themeMode,
+          initialRoute: RoutePaths.home,
+          onGenerateRoute: appRouter.onGenerateRoute,
+          builder: (context, child) {
+            return child ?? const SizedBox.shrink();
+          },
+        );
+      },
     );
   }
 }

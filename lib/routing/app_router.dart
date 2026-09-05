@@ -34,6 +34,7 @@ class AppRouter {
             emergencyController: emergencyController,
             locationController: locationController,
             simulationController: simulationController,
+            trackingRepository: trackingRepository,
           ),
         );
 

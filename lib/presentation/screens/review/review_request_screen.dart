@@ -55,10 +55,13 @@ class ReviewRequestScreen extends StatelessWidget {
       appBar: AppBar(
         title: const Text('Review Emergency Request'),
       ),
-      body: Column(
-        children: [
-          Expanded(
-            child: SingleChildScrollView(
+      body: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 640),
+          child: Column(
+            children: [
+              Expanded(
+                child: SingleChildScrollView(
               padding: const EdgeInsets.all(20),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -329,6 +332,8 @@ class ReviewRequestScreen extends StatelessWidget {
           ),
         ],
       ),
-    );
-  }
+    ),
+  ),
+);
+}
 }

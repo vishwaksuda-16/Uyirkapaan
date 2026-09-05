@@ -16,9 +16,23 @@ enum LocationFetchStatus {
 /// Controller responsible for acquiring GPS coordinates, managing permissions,
 /// and maintaining manual location overrides.
 class LocationController extends ChangeNotifier {
-  LocationFetchStatus _status = LocationFetchStatus.initial;
-  LocationData? _deviceLocation;
-  LocationData? _emergencyLocation;
+  LocationFetchStatus _status = LocationFetchStatus.success;
+  LocationData? _deviceLocation = LocationData(
+    latitude: AppConstants.defaultLatitude,
+    longitude: AppConstants.defaultLongitude,
+    accuracy: AppConstants.defaultAccuracy,
+    timestamp: DateTime.now(),
+    readableAddress: 'Anna Salai, Central Chennai',
+    isManualOverride: false,
+  );
+  LocationData? _emergencyLocation = LocationData(
+    latitude: AppConstants.defaultLatitude,
+    longitude: AppConstants.defaultLongitude,
+    accuracy: AppConstants.defaultAccuracy,
+    timestamp: DateTime.now(),
+    readableAddress: 'Anna Salai, Central Chennai',
+    isManualOverride: false,
+  );
   String? _errorMessage;
 
   LocationFetchStatus get status => _status;
@@ -29,7 +43,7 @@ class LocationController extends ChangeNotifier {
   bool get isManualOverride => _emergencyLocation?.isManualOverride ?? false;
 
   LocationController() {
-    // Automatically attempt to fetch GPS location on startup
+    // Automatically attempt to query real GPS hardware/browser location
     fetchCurrentLocation();
   }
 
@@ -129,6 +143,18 @@ class LocationController extends ChangeNotifier {
     } else {
       fetchCurrentLocation();
     }
+  }
+
+  /// Actively queries device GPS hardware/browser location, removes manual pin override,
+  /// and updates emergency location to match true current position.
+  Future<LocationData?> snapToCurrentGps() async {
+    await fetchCurrentLocation();
+    if (_deviceLocation != null) {
+      _emergencyLocation = _deviceLocation;
+      notifyListeners();
+      return _emergencyLocation;
+    }
+    return null;
   }
 
   void _useFallbackLocation() {

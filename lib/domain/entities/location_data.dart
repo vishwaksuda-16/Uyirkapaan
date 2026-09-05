@@ -22,6 +22,9 @@ class LocationData {
     this.isManualOverride = false,
   });
 
+  /// Address alias for readableAddress
+  String? get address => readableAddress;
+
   LocationData copyWith({
     double? latitude,
     double? longitude,
