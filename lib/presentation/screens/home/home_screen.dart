@@ -219,7 +219,9 @@ class _HomeScreenState extends State<HomeScreen> {
       valueListenable: useRemoteBackendNotifier,
       builder: (context, isRemote, _) {
         final color = isRemote ? const Color(0xFF16A34A) : Colors.amber.shade800;
-        final label = isRemote ? 'LIVE BACKEND' : 'SIMULATION';
+        final label = isDesktop
+            ? (isRemote ? 'LIVE BACKEND' : 'SIMULATION')
+            : (isRemote ? 'LIVE' : 'SIM');
         return Tooltip(
           message: isRemote
               ? 'Connected to Node.js Backend (http://localhost:4000). Click to toggle Simulation.'
@@ -243,7 +245,10 @@ class _HomeScreenState extends State<HomeScreen> {
             },
             borderRadius: BorderRadius.circular(20),
             child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+              padding: EdgeInsets.symmetric(
+                horizontal: isDesktop ? 12 : 7,
+                vertical: isDesktop ? 7 : 4,
+              ),
               decoration: BoxDecoration(
                 color: color.withValues(alpha: 0.15),
                 borderRadius: BorderRadius.circular(20),
@@ -253,21 +258,21 @@ class _HomeScreenState extends State<HomeScreen> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Container(
-                    width: 7,
-                    height: 7,
+                    width: isDesktop ? 7 : 5,
+                    height: isDesktop ? 7 : 5,
                     decoration: BoxDecoration(
                       color: color,
                       shape: BoxShape.circle,
                     ),
                   ),
-                  const SizedBox(width: 5),
+                  const SizedBox(width: 4),
                   Text(
                     label,
                     style: TextStyle(
                       color: color,
-                      fontSize: 11,
+                      fontSize: isDesktop ? 11 : 9.5,
                       fontWeight: FontWeight.w900,
-                      letterSpacing: 0.4,
+                      letterSpacing: 0.3,
                     ),
                   ),
                 ],
@@ -1231,14 +1236,14 @@ class _HomeScreenState extends State<HomeScreen> {
 
           // 3. RIGHT FLOATING ACTIONS (GPS Re-center & Emergency Call)
           Positioned(
-            right: isDesktop ? 24 : 16,
-            bottom: isDesktop ? 135 : (hasActiveRequest ? 280 : 380),
+            right: isDesktop ? 24 : 14,
+            bottom: isDesktop ? 135 : (hasActiveRequest ? 215 : 295),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
                 SizedBox(
-                  width: isDesktop ? 54 : 56,
-                  height: isDesktop ? 54 : 56,
+                  width: isDesktop ? 54 : 46,
+                  height: isDesktop ? 54 : 46,
                   child: FloatingActionButton(
                     heroTag: 'home_recenter_gps',
                     onPressed: () async {
@@ -1256,15 +1261,15 @@ class _HomeScreenState extends State<HomeScreen> {
                     },
                     backgroundColor: Colors.white,
                     foregroundColor: AppColors.emergencyDarkRed,
-                    elevation: 6,
+                    elevation: 5,
                     tooltip: 'Snap to GPS Position',
-                    child: Icon(Icons.my_location_rounded, size: isDesktop ? 26 : 26),
+                    child: Icon(Icons.my_location_rounded, size: isDesktop ? 26 : 22),
                   ),
                 ),
-                SizedBox(height: isDesktop ? 12 : 12),
+                SizedBox(height: isDesktop ? 12 : 10),
                 SizedBox(
-                  width: isDesktop ? 54 : 56,
-                  height: isDesktop ? 54 : 56,
+                  width: isDesktop ? 54 : 46,
+                  height: isDesktop ? 54 : 46,
                   child: FloatingActionButton(
                     heroTag: 'home_dial_108',
                     onPressed: () {
@@ -1274,9 +1279,9 @@ class _HomeScreenState extends State<HomeScreen> {
                     },
                     backgroundColor: AppColors.emergencyRed,
                     foregroundColor: Colors.white,
-                    elevation: 6,
+                    elevation: 5,
                     tooltip: 'Call 108 Helpline',
-                    child: Icon(Icons.phone_in_talk_rounded, size: isDesktop ? 26 : 24),
+                    child: Icon(Icons.phone_in_talk_rounded, size: isDesktop ? 26 : 20),
                   ),
                 ),
               ],
@@ -1541,7 +1546,149 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  /// Mobile Top Bar (Clean, Compact Column Layout)
+  /// Mobile Options & Controls Drawer Sheet
+  void _showMobileMenuSheet(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) {
+        return Material(
+          color: isDark ? const Color(0xFF1E293B) : Colors.white,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+          clipBehavior: Clip.antiAlias,
+          child: SafeArea(
+            top: false,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Center(
+                    child: Container(
+                      width: 40,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: isDark ? Colors.white24 : Colors.black12,
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text(
+                        'UyirKappan Controls',
+                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
+                      ),
+                      _buildThemeToggleButton(isDesktop: false),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  // Option 1: Demo Scenarios
+                  ListTile(
+                    leading: Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: Colors.amber.shade900.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Icon(Icons.tune_rounded, color: Colors.amber.shade900, size: 20),
+                    ),
+                    title: const Text('Interactive Demo Scenarios', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 14)),
+                    subtitle: const Text('Normal Dispatch, Fallback, Timeout & No Ambulance', style: TextStyle(fontSize: 11)),
+                    trailing: const Icon(Icons.chevron_right_rounded),
+                    onTap: () {
+                      Navigator.pop(context);
+                      Navigator.pushNamed(context, RoutePaths.simulationScenarios);
+                    },
+                  ),
+                  // Option 2: Bystander Profile & Auth
+                  ListTile(
+                    leading: Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF0284C7).withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: const Icon(Icons.account_circle_rounded, color: Color(0xFF0284C7), size: 20),
+                    ),
+                    title: const Text('Bystander User Profile', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 14)),
+                    subtitle: const Text('Manage credentials, login, and view JWT Bearer token', style: TextStyle(fontSize: 11)),
+                    trailing: const Icon(Icons.chevron_right_rounded),
+                    onTap: () {
+                      Navigator.pop(context);
+                      _showUserProfileModal(context);
+                    },
+                  ),
+                  // Option 3: Request History
+                  ListTile(
+                    leading: Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF16A34A).withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: const Icon(Icons.history_rounded, color: Color(0xFF16A34A), size: 20),
+                    ),
+                    title: const Text('Emergency Request History', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 14)),
+                    subtitle: const Text('Inspect previously dispatched and completed emergency requests', style: TextStyle(fontSize: 11)),
+                    trailing: const Icon(Icons.chevron_right_rounded),
+                    onTap: () {
+                      Navigator.pop(context);
+                      _showRequestHistoryModal();
+                    },
+                  ),
+                  const Divider(height: 20),
+                  // Map Vector Style Selector
+                  const Text('Map Vector Style', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 13)),
+                  const SizedBox(height: 8),
+                  MapStyleSelector(
+                    currentStyle: _selectedMapStyle,
+                    onStyleSelected: (style) {
+                      setState(() => _selectedMapStyle = style);
+                      Navigator.pop(context);
+                    },
+                  ),
+                  const SizedBox(height: 12),
+                  // POI Network Filters
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _buildPoiFilterChip(
+                          label: '🏥 Hospitals (${NearbyEmergencyService.fixedHospitals.length})',
+                          isSelected: _showHospitals,
+                          color: const Color(0xFF0284C7),
+                          isDesktop: false,
+                          onTap: () => setState(() => _showHospitals = !_showHospitals),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: _buildPoiFilterChip(
+                          label: '🚑 Standby (${NearbyEmergencyService.fixedAmbulances.length})',
+                          isSelected: _showAmbulances,
+                          color: const Color(0xFF16A34A),
+                          isDesktop: false,
+                          onTap: () => setState(() => _showAmbulances = !_showAmbulances),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  /// Mobile Top Bar (Single-Row Floating Navigation Capsule)
   Widget _buildMobileTopBar({
     required BuildContext context,
     required bool isDark,
@@ -1551,209 +1698,126 @@ class _HomeScreenState extends State<HomeScreen> {
     String? assignedAmbulanceId,
     NearbyHospital? assignedHospital,
   }) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        // Brand Capsule + Simulation Switcher + Theme Toggle
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-          decoration: BoxDecoration(
-            color: isDark ? const Color(0xFF0F172A).withValues(alpha: 0.95) : Colors.white.withValues(alpha: 0.95),
-            borderRadius: BorderRadius.circular(24),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.14),
-                blurRadius: 16,
-                offset: const Offset(0, 4),
-              ),
-            ],
+    return Container(
+      height: 52,
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF0F172A).withValues(alpha: 0.95) : Colors.white.withValues(alpha: 0.95),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: isDark ? Colors.white.withValues(alpha: 0.12) : Colors.black.withValues(alpha: 0.08),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.14),
+            blurRadius: 16,
+            offset: const Offset(0, 4),
           ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Row(
+        ],
+      ),
+      child: Row(
+        children: [
+          // Branding Icon
+          Container(
+            padding: const EdgeInsets.all(6),
+            decoration: BoxDecoration(
+              color: AppColors.emergencyRed,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: const Icon(
+              Icons.health_and_safety_rounded,
+              color: Colors.white,
+              size: 18,
+            ),
+          ),
+          const SizedBox(width: 7),
+          const Flexible(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  AppConstants.appName,
+                  style: TextStyle(
+                    fontSize: 14.5,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: -0.4,
+                    color: AppColors.emergencyRed,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                Text(
+                  '108 Emergency',
+                  style: TextStyle(
+                    fontSize: 9,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.textSecondaryLight,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 6),
+
+          // Backend Mode Pill (Live vs Sim)
+          _buildBackendModePill(isDesktop: false),
+          const SizedBox(width: 5),
+
+          // Quick Demo Scenarios Pill
+          InkWell(
+            onTap: () {
+              Navigator.pushNamed(context, RoutePaths.simulationScenarios);
+            },
+            borderRadius: BorderRadius.circular(14),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
+              decoration: BoxDecoration(
+                color: Colors.amber.shade900.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: Colors.amber.shade700, width: 1.1),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
                 children: [
                   Container(
-                    padding: const EdgeInsets.all(7),
+                    width: 5,
+                    height: 5,
                     decoration: BoxDecoration(
-                      color: AppColors.emergencyRed,
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: const Icon(
-                      Icons.health_and_safety_rounded,
-                      color: Colors.white,
-                      size: 20,
+                      color: Colors.amber.shade600,
+                      shape: BoxShape.circle,
                     ),
                   ),
-                  const SizedBox(width: 10),
-                  const Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        AppConstants.appName,
-                        style: TextStyle(
-                          fontSize: 17,
-                          fontWeight: FontWeight.w900,
-                          letterSpacing: -0.5,
-                          color: AppColors.emergencyRed,
-                        ),
-                      ),
-                      Text(
-                        'Emergency Response System',
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600,
-                          color: AppColors.textSecondaryLight,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const Spacer(),
-                  _buildThemeToggleButton(isDesktop: false),
-                  const SizedBox(width: 6),
-                  InkWell(
-                    onTap: () {
-                      Navigator.pushNamed(context, RoutePaths.simulationScenarios);
-                    },
-                    borderRadius: BorderRadius.circular(20),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                      decoration: BoxDecoration(
-                        color: Colors.amber.shade900.withValues(alpha: 0.15),
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(color: Colors.amber.shade700, width: 1.2),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Container(
-                            width: 7,
-                            height: 7,
-                            decoration: BoxDecoration(
-                              color: Colors.amber.shade600,
-                              shape: BoxShape.circle,
-                            ),
-                          ),
-                          const SizedBox(width: 5),
-                          Text(
-                            'DEMO',
-                            style: TextStyle(
-                              color: Colors.amber.shade900,
-                              fontSize: 11,
-                              fontWeight: FontWeight.w900,
-                              letterSpacing: 0.5,
-                            ),
-                          ),
-                        ],
-                      ),
+                  const SizedBox(width: 4),
+                  Text(
+                    'DEMO',
+                    style: TextStyle(
+                      color: Colors.amber.shade900,
+                      fontSize: 9.5,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: 0.3,
                     ),
                   ),
                 ],
               ),
-              const SizedBox(height: 8),
-              SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    _buildBackendModePill(isDesktop: false),
-                    const SizedBox(width: 6),
-                    _buildHistoryButton(isDesktop: false),
-                    const SizedBox(width: 6),
-                    _buildAuthUserPill(isDesktop: false),
-                  ],
-                ),
-              ),
-            ],
+            ),
           ),
-        ),
+          const SizedBox(width: 2),
 
-        const SizedBox(height: 8),
-
-        // Floating Map Style Selector Pill
-        MapStyleSelector(
-          currentStyle: _selectedMapStyle,
-          onStyleSelected: (style) {
-            setState(() => _selectedMapStyle = style);
-          },
-        ),
-
-        // POI Toggle Row (Hospitals & Ambulances)
-        Padding(
-          padding: const EdgeInsets.only(top: 6),
-          child: isAmbulanceAssigned
-              ? Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF16A34A).withValues(alpha: 0.15),
-                        borderRadius: BorderRadius.circular(16),
-                        border: Border.all(color: const Color(0xFF16A34A), width: 1.1),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Text('🚑', style: TextStyle(fontSize: 11)),
-                          const SizedBox(width: 4),
-                          Text(
-                            'Unit: ${assignedAmbulanceId ?? "Assigned"}',
-                            style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w900, color: Color(0xFF16A34A)),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: 6),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF0284C7).withValues(alpha: 0.15),
-                        borderRadius: BorderRadius.circular(16),
-                        border: Border.all(color: const Color(0xFF0284C7), width: 1.1),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Text('🏥', style: TextStyle(fontSize: 11)),
-                          const SizedBox(width: 4),
-                          ConstrainedBox(
-                            constraints: const BoxConstraints(maxWidth: 140),
-                            child: Text(
-                              assignedHospital?.name ?? 'Assigned Hospital',
-                              style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w900, color: Color(0xFF0284C7)),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                )
-              : Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    _buildPoiFilterChip(
-                      label: '🏥 Hospitals (${hospitals.length})',
-                      isSelected: _showHospitals,
-                      color: const Color(0xFF0284C7),
-                      isDesktop: false,
-                      onTap: () => setState(() => _showHospitals = !_showHospitals),
-                    ),
-                    const SizedBox(width: 8),
-                    _buildPoiFilterChip(
-                      label: '🚑 Ambulances (${standbyAmbulances.length})',
-                      isSelected: _showAmbulances,
-                      color: const Color(0xFF16A34A),
-                      isDesktop: false,
-                      onTap: () => setState(() => _showAmbulances = !_showAmbulances),
-                    ),
-                  ],
-                ),
-        ),
-      ],
+          // Mobile Menu Button (Profile, History, Layers)
+          IconButton(
+            onPressed: () => _showMobileMenuSheet(context),
+            icon: const Icon(Icons.more_vert_rounded, size: 19),
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+            splashRadius: 18,
+            tooltip: 'Settings & Layers',
+          ),
+        ],
+      ),
     );
   }
 
@@ -1784,12 +1848,102 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ],
       ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          // Section 1: Location & Direct Helpline (Width: 380)
-          SizedBox(
-            width: 380,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final isNarrow = constraints.maxWidth < 950;
+          if (isNarrow) {
+            return Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Expanded(
+                      child: Text(
+                        'Emergency Medical Assistance',
+                        style: TextStyle(fontSize: 14.5, fontWeight: FontWeight.w900),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    InkWell(
+                      onTap: _showVoiceAssistanceModal,
+                      borderRadius: BorderRadius.circular(10),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: AppColors.emergencyLightRed,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: AppColors.emergencyRed.withValues(alpha: 0.3)),
+                        ),
+                        child: const Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.phone_rounded, size: 12, color: AppColors.emergencyDarkRed),
+                            SizedBox(width: 4),
+                            Text('108 Helpline', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: AppColors.emergencyDarkRed)),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      flex: 3,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                        decoration: BoxDecoration(
+                          color: isDark ? const Color(0xFF0F172A) : const Color(0xFFEFF6FF),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: const Color(0xFF3B82F6).withValues(alpha: 0.4)),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.location_on_rounded, color: AppColors.emergencyRed, size: 18),
+                            const SizedBox(width: 6),
+                            Expanded(
+                              child: Text(
+                                loc?.address ?? '${loc?.latitude.toStringAsFixed(4) ?? "13.0827"}° N, ${loc?.longitude.toStringAsFixed(4) ?? "80.2707"}° E',
+                                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      flex: 2,
+                      child: SizedBox(
+                        height: 38,
+                        child: EmergencyButton(
+                          label: 'DISPATCH',
+                          subLabel: '108 SOS',
+                          isLoading: widget.emergencyController.submissionState == SubmissionState.submitting,
+                          onPressed: _dispatchAmbulance,
+                          isCompact: true,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            );
+          }
+
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              // Section 1: Location & Direct Helpline (Width: 380)
+              SizedBox(
+                width: 380,
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -2085,6 +2239,8 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ),
         ],
+          );
+        },
       ),
     );
   }
@@ -2432,7 +2588,6 @@ class _HomeScreenState extends State<HomeScreen> {
     final status = request.status;
     final isFallbackActive = request.fallbackCount > 0 && status == RequestStatus.searching;
     final etaMinutes = _currentTelemetry?.eta?.estimatedMinutes ?? request.currentETA ?? 5;
-    final etaFormatted = 'ETA: $etaMinutes minutes';
     final ambulanceId = _currentTelemetry?.ambulanceId ?? request.assignedAmbulanceId ?? 'AMB-CH-042';
 
     return Container(
@@ -2478,50 +2633,59 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ],
 
-          // ETA & Status Header Row
+          // ETA & Status Header Row (Bounded flex row with zero overflow)
           Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Row(
-                children: [
-                  Container(
-                    padding: EdgeInsets.symmetric(horizontal: isDesktop ? 12 : 10, vertical: isDesktop ? 6 : 5),
-                    decoration: BoxDecoration(
-                      color: AppColors.emergencyRed,
-                      borderRadius: BorderRadius.circular(12),
+              Container(
+                padding: EdgeInsets.symmetric(horizontal: isDesktop ? 12 : 9, vertical: isDesktop ? 6 : 5),
+                decoration: BoxDecoration(
+                  color: AppColors.emergencyRed,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.timer_rounded, color: Colors.white, size: isDesktop ? 16 : 14),
+                    const SizedBox(width: 4),
+                    Text(
+                      'ETA: $etaMinutes min',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: isDesktop ? 13 : 11.5,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: 0.3,
+                      ),
                     ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.timer_rounded, color: Colors.white, size: isDesktop ? 16 : 14),
-                        const SizedBox(width: 5),
-                        Text(
-                          etaFormatted,
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: isDesktop ? 13 : 11.5,
-                            fontWeight: FontWeight.w900,
-                            letterSpacing: 0.4,
-                          ),
-                        ),
-                      ],
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: StatusBadge(status: status),
+              ),
+              if (request.status.canCancel) ...[
+                const SizedBox(width: 6),
+                InkWell(
+                  onTap: _showCancelDialog,
+                  borderRadius: BorderRadius.circular(10),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+                    decoration: BoxDecoration(
+                      color: Colors.red.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: Colors.red.withValues(alpha: 0.3)),
+                    ),
+                    child: const Text(
+                      'CANCEL',
+                      style: TextStyle(
+                        color: Colors.redAccent,
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.w900,
+                      ),
                     ),
                   ),
-                  const SizedBox(width: 8),
-                  StatusBadge(status: status),
-                ],
-              ),
-              TextButton(
-                onPressed: request.status.canCancel ? _showCancelDialog : null,
-                style: TextButton.styleFrom(
-                  foregroundColor: request.status.canCancel ? Colors.redAccent : Colors.grey,
-                  visualDensity: VisualDensity.compact,
                 ),
-                child: Text(
-                  request.status.canCancel ? 'CANCEL' : 'EN ROUTE',
-                  style: TextStyle(fontWeight: FontWeight.w800, fontSize: isDesktop ? 12 : 11),
-                ),
-              ),
+              ],
             ],
           ),
 
@@ -2550,10 +2714,14 @@ class _HomeScreenState extends State<HomeScreen> {
                     Text(
                       ambulanceId,
                       style: TextStyle(fontSize: isDesktop ? 17.5 : 16, fontWeight: FontWeight.w900, letterSpacing: 0.3),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                     ),
                     Text(
                       'Driver: ${request.assignedDriverName ?? "Suresh Kumar"} • Unit in Focus',
                       style: TextStyle(fontSize: isDesktop ? 13 : 12, color: AppColors.textSecondaryLight, fontWeight: FontWeight.w500),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                     ),
                   ],
                 ),
@@ -2871,40 +3039,46 @@ class _HomeScreenState extends State<HomeScreen> {
         children: [
           // Alert Tag Row
           Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                decoration: BoxDecoration(
-                  color: AppColors.emergencyRed,
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: const Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(Icons.warning_amber_rounded, color: Colors.white, size: 15),
-                    SizedBox(width: 5),
-                    Text(
-                      'NO AMBULANCE AVAILABLE',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 11.5,
-                        fontWeight: FontWeight.w900,
-                        letterSpacing: 0.5,
+              Expanded(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  decoration: BoxDecoration(
+                    color: AppColors.emergencyRed,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.warning_amber_rounded, color: Colors.white, size: 15),
+                      SizedBox(width: 5),
+                      Flexible(
+                        child: Text(
+                          'NO AMBULANCE AVAILABLE',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w900,
+                            letterSpacing: 0.4,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
+              const SizedBox(width: 8),
               FilledButton.icon(
                 onPressed: () => widget.emergencyController.resetForm(),
                 icon: const Icon(Icons.refresh_rounded, size: 14, color: Colors.white),
-                label: const Text('DISMISS / RETRY', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 11, color: Colors.white)),
+                label: const Text('RETRY', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 11, color: Colors.white)),
                 style: FilledButton.styleFrom(
                   backgroundColor: AppColors.emergencyRed,
                   foregroundColor: Colors.white,
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                  minimumSize: const Size(110, 32),
+                  minimumSize: const Size(80, 32),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                 ),
               ),
@@ -3002,7 +3176,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     return Container(
       key: const ValueKey('idle_emergency_sheet'),
-      padding: EdgeInsets.all(isDesktop ? 22 : 18),
+      padding: EdgeInsets.symmetric(horizontal: isDesktop ? 22 : 16, vertical: isDesktop ? 20 : 14),
       decoration: BoxDecoration(
         color: isDark ? const Color(0xFF1E293B) : Colors.white,
         borderRadius: BorderRadius.circular(24),
@@ -3026,7 +3200,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 child: Text(
                   'Emergency Medical Assistance',
                   style: TextStyle(
-                    fontSize: isDesktop ? 19 : 16,
+                    fontSize: isDesktop ? 19 : 15.5,
                     fontWeight: FontWeight.w900,
                     letterSpacing: -0.3,
                   ),
@@ -3039,23 +3213,23 @@ class _HomeScreenState extends State<HomeScreen> {
                 onTap: () {
                   _showVoiceAssistanceModal();
                 },
-                borderRadius: BorderRadius.circular(14),
+                borderRadius: BorderRadius.circular(12),
                 child: Container(
-                  padding: EdgeInsets.symmetric(horizontal: isDesktop ? 12 : 10, vertical: isDesktop ? 7 : 6),
+                  padding: EdgeInsets.symmetric(horizontal: isDesktop ? 12 : 9, vertical: isDesktop ? 7 : 5),
                   decoration: BoxDecoration(
                     color: AppColors.emergencyLightRed,
-                    borderRadius: BorderRadius.circular(14),
+                    borderRadius: BorderRadius.circular(12),
                     border: Border.all(color: AppColors.emergencyRed.withValues(alpha: 0.3)),
                   ),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Icon(Icons.phone_rounded, size: isDesktop ? 16 : 14, color: AppColors.emergencyDarkRed),
+                      Icon(Icons.phone_rounded, size: isDesktop ? 16 : 13, color: AppColors.emergencyDarkRed),
                       const SizedBox(width: 4),
                       Text(
                         'Direct Emergency Helpline',
                         style: TextStyle(
-                          fontSize: isDesktop ? 12 : 11,
+                          fontSize: isDesktop ? 12 : 10.5,
                           fontWeight: FontWeight.w800,
                           color: AppColors.emergencyDarkRed,
                         ),
@@ -3067,26 +3241,26 @@ class _HomeScreenState extends State<HomeScreen> {
             ],
           ),
 
-          const SizedBox(height: 10),
+          const SizedBox(height: 8),
 
           // High-Visibility Dedicated Current Incident Location Card (Opaque against Map Bleed)
           GestureDetector(
             behavior: HitTestBehavior.opaque,
             onTap: () {},
             child: Container(
-              padding: EdgeInsets.all(isDesktop ? 16 : 14),
+              padding: EdgeInsets.symmetric(horizontal: isDesktop ? 16 : 12, vertical: isDesktop ? 14 : 9),
               decoration: BoxDecoration(
                 color: isDark ? const Color(0xFF0F172A) : const Color(0xFFEFF6FF),
-                borderRadius: BorderRadius.circular(18),
+                borderRadius: BorderRadius.circular(16),
                 border: Border.all(
                   color: _isPinLocked ? (isDark ? Colors.white24 : const Color(0xFF94A3B8)) : const Color(0xFF3B82F6).withValues(alpha: 0.6),
-                  width: 1.5,
+                  width: 1.3,
                 ),
               ),
               child: Row(
                 children: [
                   Container(
-                    padding: EdgeInsets.all(isDesktop ? 12 : 10),
+                    padding: EdgeInsets.all(isDesktop ? 12 : 8),
                     decoration: BoxDecoration(
                       color: (_isPinLocked ? Colors.blueGrey : AppColors.emergencyRed).withValues(alpha: 0.12),
                       shape: BoxShape.circle,
@@ -3096,10 +3270,10 @@ class _HomeScreenState extends State<HomeScreen> {
                           ? Icons.lock_rounded
                           : (loc?.isManualOverride == true ? Icons.edit_location_alt_rounded : Icons.location_on_rounded),
                       color: _isPinLocked ? (isDark ? Colors.white70 : const Color(0xFF475569)) : AppColors.emergencyRed,
-                      size: isDesktop ? 28 : 26,
+                      size: isDesktop ? 28 : 22,
                     ),
                   ),
-                  const SizedBox(width: 12),
+                  const SizedBox(width: 10),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -3107,8 +3281,8 @@ class _HomeScreenState extends State<HomeScreen> {
                         Row(
                           children: [
                             Container(
-                              width: 8,
-                              height: 8,
+                              width: 7,
+                              height: 7,
                               decoration: BoxDecoration(
                                 color: _isPinLocked
                                     ? const Color(0xFF64748B)
@@ -3116,16 +3290,16 @@ class _HomeScreenState extends State<HomeScreen> {
                                 shape: BoxShape.circle,
                               ),
                             ),
-                            const SizedBox(width: 6),
+                            const SizedBox(width: 5),
                             Flexible(
                               child: Text(
                                 _isPinLocked
                                     ? 'LOCATION LOCKED'
                                     : (loc?.isManualOverride == true ? 'MANUAL PINPOINT' : 'GPS POSITION (DETECTED)'),
                                 style: TextStyle(
-                                  fontSize: isDesktop ? 11.5 : 10,
+                                  fontSize: isDesktop ? 11.5 : 9.5,
                                   fontWeight: FontWeight.w900,
-                                  letterSpacing: 0.6,
+                                  letterSpacing: 0.5,
                                   color: _isPinLocked
                                       ? (isDark ? Colors.blueGrey.shade200 : const Color(0xFF475569))
                                       : (loc?.isManualOverride == true
@@ -3137,26 +3311,26 @@ class _HomeScreenState extends State<HomeScreen> {
                             ),
                           ],
                         ),
-                        const SizedBox(height: 4),
+                        const SizedBox(height: 3),
                         Text(
                           loc?.address ??
                               (loc != null
                                   ? '${loc.latitude.toStringAsFixed(4)}° N, ${loc.longitude.toStringAsFixed(4)}° E'
                                   : '13.0827° N, 80.2707° E (Chennai Central Corridor)'),
                           style: TextStyle(
-                            fontSize: isDesktop ? 15.5 : 14,
+                            fontSize: isDesktop ? 15.5 : 13.5,
                             fontWeight: FontWeight.w800,
                           ),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         ),
-                        const SizedBox(height: 3),
+                        const SizedBox(height: 2),
                         Text(
                           _isPinLocked
                               ? 'Position locked • Tap [Unlock] to modify'
                               : 'Tap map or drag pin to set pickup spot',
                           style: TextStyle(
-                            fontSize: isDesktop ? 12 : 11,
+                            fontSize: isDesktop ? 12 : 10.5,
                             fontWeight: FontWeight.w600,
                             color: AppColors.textSecondaryLight,
                           ),
@@ -3175,18 +3349,18 @@ class _HomeScreenState extends State<HomeScreen> {
                       foregroundColor: _isPinLocked
                           ? (isDark ? Colors.white70 : const Color(0xFF334155))
                           : (isDark ? Colors.white : const Color(0xFF1E40AF)),
-                      padding: EdgeInsets.symmetric(horizontal: isDesktop ? 14 : 10, vertical: isDesktop ? 10 : 8),
+                      padding: EdgeInsets.symmetric(horizontal: isDesktop ? 14 : 8, vertical: isDesktop ? 10 : 6),
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                      minimumSize: Size(isDesktop ? 96 : 82, isDesktop ? 44 : 40),
+                      minimumSize: Size(isDesktop ? 96 : 74, isDesktop ? 44 : 34),
                     ),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Icon(_isPinLocked ? Icons.lock_open_rounded : Icons.lock_rounded, size: 16),
-                        const SizedBox(width: 5),
+                        Icon(_isPinLocked ? Icons.lock_open_rounded : Icons.lock_rounded, size: isDesktop ? 16 : 14),
+                        const SizedBox(width: 4),
                         Text(
                           _isPinLocked ? 'UNLOCK' : 'LOCK PIN',
-                          style: TextStyle(fontSize: isDesktop ? 12.5 : 11, fontWeight: FontWeight.w900),
+                          style: TextStyle(fontSize: isDesktop ? 12.5 : 10.5, fontWeight: FontWeight.w900),
                         ),
                       ],
                     ),
@@ -3196,11 +3370,11 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ),
 
-          const SizedBox(height: 12),
+          const SizedBox(height: 10),
 
-          // Emergency Category Selection Pills (Horizontal Scroll - Enlarged)
+          // Emergency Category Selection Pills (Horizontal Scroll)
           SizedBox(
-            height: isDesktop ? 56 : 48,
+            height: isDesktop ? 56 : 38,
             child: ListView.builder(
               scrollDirection: Axis.horizontal,
               itemCount: EmergencyType.values.length,
@@ -3209,24 +3383,24 @@ class _HomeScreenState extends State<HomeScreen> {
                 final isSelected = type == selectedType;
 
                 return Padding(
-                  padding: const EdgeInsets.only(right: 8),
+                  padding: const EdgeInsets.only(right: 7),
                   child: InkWell(
                     onTap: () => widget.emergencyController.setEmergencyType(type),
-                    borderRadius: BorderRadius.circular(22),
+                    borderRadius: BorderRadius.circular(20),
                     child: AnimatedContainer(
                       duration: const Duration(milliseconds: 180),
                       padding: EdgeInsets.symmetric(
-                        horizontal: isDesktop ? 18 : 16,
-                        vertical: isDesktop ? 12 : 10,
+                        horizontal: isDesktop ? 18 : 12,
+                        vertical: isDesktop ? 12 : 7,
                       ),
                       decoration: BoxDecoration(
                         color: isSelected
                             ? AppColors.emergencyRed
                             : (isDark ? const Color(0xFF0F172A) : Colors.grey.shade100),
-                        borderRadius: BorderRadius.circular(22),
+                        borderRadius: BorderRadius.circular(20),
                         border: Border.all(
                           color: isSelected ? AppColors.emergencyRed : Colors.black.withValues(alpha: 0.12),
-                          width: 1.5,
+                          width: 1.3,
                         ),
                       ),
                       child: Row(
@@ -3234,14 +3408,14 @@ class _HomeScreenState extends State<HomeScreen> {
                         children: [
                           Icon(
                             type.icon,
-                            size: isDesktop ? 24 : 20,
+                            size: isDesktop ? 24 : 17,
                             color: isSelected ? Colors.white : AppColors.emergencyRed,
                           ),
-                          const SizedBox(width: 8),
+                          const SizedBox(width: 6),
                           Text(
                             type.displayName,
                             style: TextStyle(
-                              fontSize: isDesktop ? 15 : 14,
+                              fontSize: isDesktop ? 15 : 12.5,
                               fontWeight: isSelected ? FontWeight.w900 : FontWeight.w700,
                               color: isSelected ? Colors.white : null,
                             ),
@@ -3255,7 +3429,7 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ),
 
-          const SizedBox(height: 12),
+          const SizedBox(height: 8),
 
           // Victims Stepper Row
           Row(
@@ -3266,15 +3440,15 @@ class _HomeScreenState extends State<HomeScreen> {
                   children: [
                     Icon(
                       Icons.personal_injury_rounded,
-                      size: isDesktop ? 24 : 20,
+                      size: isDesktop ? 24 : 18,
                       color: AppColors.emergencyRed,
                     ),
-                    const SizedBox(width: 8),
+                    const SizedBox(width: 6),
                     Flexible(
                       child: Text(
                         'Patients / Victims:',
                         style: TextStyle(
-                          fontSize: isDesktop ? 15 : 13,
+                          fontSize: isDesktop ? 15 : 12.5,
                           fontWeight: FontWeight.w800,
                         ),
                         overflow: TextOverflow.ellipsis,
@@ -3295,13 +3469,14 @@ class _HomeScreenState extends State<HomeScreen> {
             ],
           ),
 
-          const SizedBox(height: 14),
+          const SizedBox(height: 10),
 
           // Primary Dominant SOS Emergency Trigger Button
           EmergencyButton(
             label: 'REQUEST AMBULANCE',
             subLabel: 'TAP FOR IMMEDIATE LIVE DISPATCH',
             isLoading: widget.emergencyController.submissionState == SubmissionState.submitting,
+            isCompact: !isDesktop,
             onPressed: _dispatchAmbulance,
           ),
         ],

@@ -6,6 +6,7 @@ class EmergencyButton extends StatefulWidget {
   final bool isLoading;
   final String label;
   final String subLabel;
+  final bool? isCompact;
 
   const EmergencyButton({
     super.key,
@@ -13,6 +14,7 @@ class EmergencyButton extends StatefulWidget {
     this.isLoading = false,
     this.label = 'REQUEST AMBULANCE',
     this.subLabel = 'TAP FOR IMMEDIATE DISPATCH',
+    this.isCompact,
   });
 
   @override
@@ -52,6 +54,7 @@ class _EmergencyButtonState extends State<EmergencyButton>
   @override
   Widget build(BuildContext context) {
     final isDesktop = MediaQuery.of(context).size.width >= 768;
+    final compact = widget.isCompact ?? (!isDesktop);
 
     return AnimatedBuilder(
       animation: _pulseController,
@@ -71,9 +74,12 @@ class _EmergencyButtonState extends State<EmergencyButton>
               child: Container(
                 width: double.infinity,
                 constraints: BoxConstraints(maxWidth: isDesktop ? 620 : 420),
-                padding: EdgeInsets.symmetric(vertical: isDesktop ? 26 : 22, horizontal: 20),
+                padding: EdgeInsets.symmetric(
+                  vertical: compact ? 13 : (isDesktop ? 26 : 22),
+                  horizontal: compact ? 16 : 20,
+                ),
                 decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(28),
+                  borderRadius: BorderRadius.circular(compact ? 18 : 28),
                   gradient: const LinearGradient(
                     colors: [
                       Color(0xFFFF3B30),
@@ -86,89 +92,142 @@ class _EmergencyButtonState extends State<EmergencyButton>
                   boxShadow: [
                     BoxShadow(
                       color: const Color(0xFFDC2626).withValues(alpha: _glowAnimation.value),
-                      blurRadius: 28,
-                      spreadRadius: 4,
-                      offset: const Offset(0, 10),
+                      blurRadius: compact ? 18 : 28,
+                      spreadRadius: compact ? 2 : 4,
+                      offset: const Offset(0, 6),
                     ),
                     BoxShadow(
                       color: Colors.black.withValues(alpha: 0.15),
-                      blurRadius: 12,
-                      offset: const Offset(0, 4),
+                      blurRadius: 10,
+                      offset: const Offset(0, 3),
                     ),
                   ],
                 ),
                 child: widget.isLoading
-                    ? const SizedBox(
-                        height: 72,
-                        child: Center(
+                    ? SizedBox(
+                        height: compact ? 36 : 72,
+                        child: const Center(
                           child: CircularProgressIndicator(
                             color: Colors.white,
-                            strokeWidth: 3.5,
+                            strokeWidth: 3,
                           ),
                         ),
                       )
-                    : Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          // Concentric pulsing icon container
-                          Container(
-                            padding: EdgeInsets.all(isDesktop ? 18 : 15),
-                            decoration: BoxDecoration(
-                              color: Colors.white.withValues(alpha: 0.18),
-                              shape: BoxShape.circle,
-                              border: Border.all(
-                                color: Colors.white.withValues(alpha: 0.35),
-                                width: 2,
-                              ),
-                            ),
-                            child: Icon(
-                              Icons.emergency_rounded,
-                              size: isDesktop ? 50 : 42,
-                              color: Colors.white,
-                            ),
-                          ),
-                          const SizedBox(height: 14),
-                          // Primary CTA Label
-                          FittedBox(
-                            fit: BoxFit.scaleDown,
-                            child: Text(
-                              widget.label,
-                              textAlign: TextAlign.center,
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontSize: isDesktop ? 21 : 19,
-                                fontWeight: FontWeight.w900,
-                                letterSpacing: 1.1,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 6),
-                          // Secondary Subtext
-                          Container(
-                            padding: EdgeInsets.symmetric(
-                              horizontal: isDesktop ? 16 : 12,
-                              vertical: isDesktop ? 5 : 4,
-                            ),
-                            decoration: BoxDecoration(
-                              color: Colors.black.withValues(alpha: 0.2),
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: FittedBox(
-                              fit: BoxFit.scaleDown,
-                              child: Text(
-                                widget.subLabel,
-                                textAlign: TextAlign.center,
-                                style: TextStyle(
-                                  color: Colors.white70,
-                                  fontSize: isDesktop ? 12 : 10.5,
-                                  fontWeight: FontWeight.w700,
-                                  letterSpacing: 0.8,
+                    : (compact
+                        ? Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.all(8),
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withValues(alpha: 0.2),
+                                  shape: BoxShape.circle,
+                                  border: Border.all(
+                                    color: Colors.white.withValues(alpha: 0.4),
+                                    width: 1.5,
+                                  ),
+                                ),
+                                child: const Icon(
+                                  Icons.emergency_rounded,
+                                  size: 22,
+                                  color: Colors.white,
                                 ),
                               ),
-                            ),
-                          ),
-                        ],
-                      ),
+                              const SizedBox(width: 12),
+                              Flexible(
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      widget.label,
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 15,
+                                        fontWeight: FontWeight.w900,
+                                        letterSpacing: 0.8,
+                                      ),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                    Text(
+                                      widget.subLabel,
+                                      style: const TextStyle(
+                                        color: Colors.white70,
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.w700,
+                                        letterSpacing: 0.5,
+                                      ),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          )
+                        : Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              // Concentric pulsing icon container
+                              Container(
+                                padding: EdgeInsets.all(isDesktop ? 18 : 15),
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withValues(alpha: 0.18),
+                                  shape: BoxShape.circle,
+                                  border: Border.all(
+                                    color: Colors.white.withValues(alpha: 0.35),
+                                    width: 2,
+                                  ),
+                                ),
+                                child: Icon(
+                                  Icons.emergency_rounded,
+                                  size: isDesktop ? 50 : 42,
+                                  color: Colors.white,
+                                ),
+                              ),
+                              const SizedBox(height: 14),
+                              // Primary CTA Label
+                              FittedBox(
+                                fit: BoxFit.scaleDown,
+                                child: Text(
+                                  widget.label,
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: isDesktop ? 21 : 19,
+                                    fontWeight: FontWeight.w900,
+                                    letterSpacing: 1.1,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 6),
+                              // Secondary Subtext
+                              Container(
+                                padding: EdgeInsets.symmetric(
+                                  horizontal: isDesktop ? 16 : 12,
+                                  vertical: isDesktop ? 5 : 4,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: Colors.black.withValues(alpha: 0.2),
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: FittedBox(
+                                  fit: BoxFit.scaleDown,
+                                  child: Text(
+                                    widget.subLabel,
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(
+                                      color: Colors.white70,
+                                      fontSize: isDesktop ? 12 : 10.5,
+                                      fontWeight: FontWeight.w700,
+                                      letterSpacing: 0.8,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          )),
               ),
             ),
           ),
