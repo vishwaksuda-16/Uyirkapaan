@@ -36,13 +36,17 @@ class StatusBadge extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 8),
-          Text(
-            status.userMessage,
-            style: TextStyle(
-              color: status.color,
-              fontSize: isLarge ? 14 : 12,
-              fontWeight: FontWeight.w700,
-              letterSpacing: 0.2,
+          Flexible(
+            child: Text(
+              status.userMessage,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: status.color,
+                fontSize: isLarge ? 14 : 12,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.2,
+              ),
             ),
           ),
         ],

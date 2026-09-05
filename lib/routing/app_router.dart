@@ -3,6 +3,7 @@ import '../domain/repositories/tracking_repository.dart';
 import '../presentation/controllers/emergency_controller.dart';
 import '../presentation/controllers/location_controller.dart';
 import '../presentation/controllers/simulation_controller.dart';
+import '../presentation/screens/auth/auth_screen.dart';
 import '../presentation/screens/emergency_form/emergency_details_screen.dart';
 import '../presentation/screens/home/home_screen.dart';
 import '../presentation/screens/location/location_picker_screen.dart';
@@ -12,18 +13,25 @@ import '../presentation/screens/status/request_status_screen.dart';
 import '../presentation/screens/tracking/tracking_placeholder_screen.dart';
 import 'route_paths.dart';
 
+import '../presentation/controllers/auth_controller.dart';
+import '../data/datasources/remote/socket_service.dart';
+
 /// Central application route generator.
 class AppRouter {
   final EmergencyController emergencyController;
   final LocationController locationController;
   final SimulationController simulationController;
   final TrackingRepository trackingRepository;
+  final AuthController? authController;
+  final SocketService? socketService;
 
   AppRouter({
     required this.emergencyController,
     required this.locationController,
     required this.simulationController,
     required this.trackingRepository,
+    this.authController,
+    this.socketService,
   });
 
   Route<dynamic> onGenerateRoute(RouteSettings settings) {
@@ -35,6 +43,15 @@ class AppRouter {
             locationController: locationController,
             simulationController: simulationController,
             trackingRepository: trackingRepository,
+            authController: authController,
+            socketService: socketService,
+          ),
+        );
+
+      case RoutePaths.auth:
+        return MaterialPageRoute(
+          builder: (_) => AuthScreen(
+            authController: authController!,
           ),
         );
 

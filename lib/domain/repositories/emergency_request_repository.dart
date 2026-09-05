@@ -24,4 +24,7 @@ abstract class EmergencyRequestRepository {
 
   /// Clears the active persisted request on completion or cancellation.
   Future<void> clearActivePersistedRequest();
+
+  /// Retrieves past emergency requests from history.
+  Future<List<EmergencyRequest>> getPastRequests();
 }

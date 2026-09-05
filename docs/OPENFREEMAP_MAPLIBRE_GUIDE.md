@@ -129,26 +129,35 @@ The map seamlessly switches between real-world device execution and demonstratio
    - When connected to a live backend (`USE_REMOTE_BACKEND=true`), WebSocket / SSE telemetry updates the ambulance position, speed, and ETA countdown.
 
 ### B. Simulated Demonstration Mode
-When running in local simulation mode, all 5 demonstration scenarios reflect visually on the OpenFreeMap canvas:
+When running in local simulation mode, all 4 demonstration scenarios reflect visually on the OpenFreeMap canvas:
 
 1. **Scenario 1 — Normal Dispatch**:
    - Initial state: Map centers on the emergency incident in Chennai ($13.0827^\circ \text{N}, 80.2707^\circ \text{E}$).
    - Status transitions to `EN_ROUTE_TO_PATIENT`: Ambulance marker `AMB-CH-042` spawns at dispatch depot coordinates ($13.0900^\circ \text{N}, 80.2780^\circ \text{E}$) and approaches the incident location along the street network.
-   - Dynamic polyline connects ambulance to patient.
-   - Heading rotation rotates the vehicle icon according to direction of travel.
-   - Dynamic ETA counts down ($8\text{ min} \rightarrow 1\text{ min}$).
+   - Dynamic polyline connects ambulance to patient with live vehicle heading rotation.
+   - Dynamic ETA counts down ($8\text{ min} \rightarrow 1\text{ min}$) alongside live telemetry.
 2. **Scenario 2 — Driver Rejection with Cascading Fallback**:
    - Initial unit `AMB-CH-011` is assigned on the map.
-   - Driver rejects: Map immediately shows the **Cascading Fallback Alert Banner** (*"Finding another ambulance..."*).
+   - Driver rejects: Map immediately displays the top **Cascading Fallback Alert Banner** (*"Finding another ambulance..."*).
    - Secondary vehicle `AMB-CH-089` spawns from another station, re-routes on the map, and heads to the patient.
 3. **Scenario 3 — Driver Timeout with Cascading Fallback**:
-   - Initial unit `AMB-CH-033` fails to respond.
-   - System auto-triggers cascading fallback; unit `AMB-CH-099` is assigned and its marker navigates to the incident.
+   - Initial unit `AMB-CH-033` fails to respond within the SLA window.
+   - System auto-triggers cascading fallback; secondary unit `AMB-CH-099` is assigned and navigates to the incident.
 4. **Scenario 4 — No Ambulance Available**:
-   - Map displays searching radar pulses across the Chennai metropolitan area.
-   - Exhausts search radius; status triggers `NO_AMBULANCE_AVAILABLE` and displays direct helpline options (`108 / 112`).
-5. **Scenario 5 — Live Telemetry & Dynamic ETA**:
-   - High-frequency telemetry stream with live speed ($52\text{ km/h}$), heading ($225^\circ$), green corridor status, and countdown timer overlaid on OpenFreeMap Bright.
+   - Map displays searching pulses across the Chennai metropolitan area.
+   - Fleet capacity exhausted: triggers `NO_AMBULANCE_AVAILABLE` and displays direct 108 helpline integration.
+
+---
+
+### C. Camera Stabilization & UX Enhancements
+To deliver a smooth user experience during live vehicle tracking and pin selection:
+1. **Destination-Keyed Camera Framing**:
+   - The map bounds calculation is keyed to the destination coordinate leg (`destKey`) rather than the moving ambulance coordinate.
+   - This completely eliminates continuous camera zoom jitter and bounce as the ambulance drives toward the victim.
+2. **Normalized Longitude Coordinates**:
+   - Prevents antimeridian wrapping anomalies when computing bounding boxes for `fitBounds`.
+3. **Cross-Platform Native Cursors**:
+   - Replaced crosshair cursor with standard natural arrow pointer (`default`) and click hand (`pointer`) across all map view modes.
 
 ---
 

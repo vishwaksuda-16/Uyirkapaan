@@ -45,6 +45,23 @@ window.uyirkappanMaps = window.uyirkappanMaps || {};
     pickerCallbacks[id] = cb;
   };
 
+  window.uyirkappanMaps.suppressClicks = function (containerId, durationMs) {
+    const s = getState(containerId);
+    s.clickSuppressed = true;
+    if (s.suppressTimer) clearTimeout(s.suppressTimer);
+    s.suppressTimer = setTimeout(function () {
+      s.clickSuppressed = false;
+      s.suppressTimer = null;
+    }, durationMs || 600);
+  };
+
+  window.uyirkappanMaps.suppressAllClicks = function (durationMs) {
+    const duration = durationMs || 600;
+    Object.keys(overlayState).forEach(function (id) {
+      window.uyirkappanMaps.suppressClicks(id, duration);
+    });
+  };
+
   function findContainer(id) {
     if (!id) return null;
     if (typeof id !== 'string') return id;
@@ -200,6 +217,8 @@ window.uyirkappanMaps = window.uyirkappanMaps || {};
         style: defaultStyle,
         center: [lng, lat],
         zoom: zoom || 14,
+        minZoom: 10.5,
+        maxZoom: 18,
         pitch: enable3D ? 55 : 0,
         bearing: 0,
         attributionControl: false
@@ -237,12 +256,41 @@ window.uyirkappanMaps = window.uyirkappanMaps || {};
 
         getState(containerId).isPickerMode = !!isPickerMode;
         if (map.getCanvas()) {
-          map.getCanvas().style.cursor = isPickerMode ? 'crosshair' : '';
+          map.getCanvas().style.cursor = isPickerMode ? 'pointer' : 'default';
         }
         window.uyirkappanMaps.updateIncidentMarker(containerId, lat, lng);
 
+
         map.on('click', function (e) {
-          if (!getState(containerId).isPickerMode) return;
+          const s = getState(containerId);
+          if (!s.isPickerMode || s.clickSuppressed) return;
+
+          if (e.originalEvent) {
+            const orig = e.originalEvent;
+            if (orig.defaultPrevented) return;
+
+            // Reject clicks originating from buttons, markers, controls, popups, or links
+            const target = orig.target;
+            if (target && target.closest) {
+              if (target.closest('button, a, input, select, .maplibregl-ctrl, .uk-incident-marker, .uk-hospital-marker, .uk-ambulance-marker, .uk-poi-callout, .maplibregl-popup')) {
+                return;
+              }
+            }
+
+            // Reject clicks landing in the top navbar or bottom dock screen regions
+            const clientY = orig.clientY;
+            const screenH = window.innerHeight;
+            const screenW = window.innerWidth;
+            const isDesktop = screenW >= 1000;
+
+            const topZone = isDesktop ? 95 : 180;
+            const bottomZone = screenH - (isDesktop ? 150 : 220);
+
+            if (clientY <= topZone || clientY >= bottomZone) {
+              return;
+            }
+          }
+
           const clickLat = e.lngLat.lat;
           const clickLng = e.lngLat.lng;
           window.uyirkappanMaps.updateIncidentMarker(containerId, clickLat, clickLng, true);
@@ -286,7 +334,7 @@ window.uyirkappanMaps = window.uyirkappanMaps || {};
     getState(containerId).isPickerMode = !!isPickerMode;
     const map = maps[containerId];
     if (map && map.getCanvas()) {
-      map.getCanvas().style.cursor = isPickerMode ? 'crosshair' : '';
+      map.getCanvas().style.cursor = isPickerMode ? 'pointer' : 'default';
     }
     if (markers[containerId] && markers[containerId].incident) {
       try {
@@ -565,23 +613,30 @@ window.uyirkappanMaps = window.uyirkappanMaps || {};
       });
     }
 
-    // Auto-focus & frame the route so ambulance, patient, and hospital are in clear view
+    // Auto-focus & frame the route ONCE per destination leg (does NOT bounce/zoom as ambulance moves)
     if (coordinates && coordinates.length > 1) {
       try {
-        const startPt = coordinates[0];
         const endPt = coordinates[coordinates.length - 1];
-        const routeKey = startPt[0].toFixed(3) + '_' + startPt[1].toFixed(3) + '_' + endPt[0].toFixed(3) + '_' + endPt[1].toFixed(3);
-        if (getState(containerId).lastFittedRouteKey !== routeKey) {
-          getState(containerId).lastFittedRouteKey = routeKey;
+        const destKey = endPt[0].toFixed(3) + '_' + endPt[1].toFixed(3);
+        if (getState(containerId).lastFittedDestKey !== destKey) {
+          getState(containerId).lastFittedDestKey = destKey;
           const bounds = new maplibregl.LngLatBounds();
+          let validCount = 0;
           coordinates.forEach(function (pt) {
-            bounds.extend(pt);
+            if (pt && typeof pt[0] === 'number' && typeof pt[1] === 'number' &&
+                pt[0] >= 75 && pt[0] <= 85 && pt[1] >= 8 && pt[1] <= 18) {
+              bounds.extend(pt);
+              validCount++;
+            }
           });
-          map.fitBounds(bounds, {
-            padding: { top: 90, bottom: 200, left: 80, right: 80 },
-            maxZoom: 15.5,
-            duration: 1000
-          });
+          if (validCount > 1) {
+            map.fitBounds(bounds, {
+              padding: { top: 90, bottom: 200, left: 80, right: 80 },
+              maxZoom: 15.0,
+              minZoom: 11.5,
+              duration: 800
+            });
+          }
         }
       } catch (err) {}
     }
@@ -589,7 +644,7 @@ window.uyirkappanMaps = window.uyirkappanMaps || {};
 
   window.uyirkappanMaps.clearRoute = function (containerId) {
     getState(containerId).route = null;
-    getState(containerId).lastFittedRouteKey = null;
+    getState(containerId).lastFittedDestKey = null;
     const map = maps[containerId];
     if (!map || !map.isStyleLoaded()) return;
     try {
@@ -600,26 +655,11 @@ window.uyirkappanMaps = window.uyirkappanMaps || {};
   };
 
   window.uyirkappanMaps.setSearchRadar = function (containerId, enabled) {
-    getState(containerId).radar = !!enabled;
+    getState(containerId).radar = false;
     const container = findContainer(containerId);
     if (!container) return;
-
-    let overlay = container.querySelector('.uk-search-radar');
-    if (enabled) {
-      if (!overlay) {
-        overlay = document.createElement('div');
-        overlay.className = 'uk-search-radar';
-        overlay.innerHTML =
-          '<div class="uk-radar-pulse"></div>' +
-          '<div class="uk-radar-pulse uk-radar-delay-1"></div>' +
-          '<div class="uk-radar-pulse uk-radar-delay-2"></div>' +
-          '<div class="uk-radar-pulse uk-radar-offset-a"></div>' +
-          '<div class="uk-radar-pulse uk-radar-offset-b"></div>';
-        container.appendChild(overlay);
-      }
-    } else if (overlay) {
-      overlay.remove();
-    }
+    const overlay = container.querySelector('.uk-search-radar');
+    if (overlay) overlay.remove();
   };
 
   window.uyirkappanMaps.setStyle = function (containerId, styleUrl, enable3D) {
@@ -653,8 +693,20 @@ window.uyirkappanMaps = window.uyirkappanMaps || {};
   window.uyirkappanMaps.fitBounds = function (containerId, lat1, lng1, lat2, lng2) {
     const map = maps[containerId];
     if (!map) return;
-    const bounds = new maplibregl.LngLatBounds([lng1, lat1], [lng2, lat2]);
-    map.fitBounds(bounds, { padding: 60, maxZoom: 16 });
+    if (isNaN(lat1) || isNaN(lng1) || isNaN(lat2) || isNaN(lng2)) return;
+    if (lat1 === 0 && lng1 === 0) return;
+    if (lat2 === 0 && lng2 === 0) return;
+    const west = Math.min(lng1, lng2);
+    const south = Math.min(lat1, lat2);
+    const east = Math.max(lng1, lng2);
+    const north = Math.max(lat1, lat2);
+    if (west < 75 || east > 85 || south < 8 || north > 18) return;
+    const bounds = new maplibregl.LngLatBounds([west, south], [east, north]);
+    map.fitBounds(bounds, {
+      padding: { top: 90, bottom: 200, left: 80, right: 80 },
+      maxZoom: 15.5,
+      minZoom: 11.5
+    });
   };
 
   window.uyirkappanMaps.resize = function (containerId) {

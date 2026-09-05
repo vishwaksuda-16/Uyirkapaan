@@ -8,6 +8,8 @@ import '../../../domain/entities/nearby_poi.dart';
 import '../../../domain/entities/request_status.dart';
 import '../tracking_datasource.dart';
 
+import '../remote/socket_service.dart';
+
 class _AssignedUnit {
   final String ambulanceId;
   final String? driverName;
@@ -44,10 +46,13 @@ class _AssignedUnit {
 
 /// Simulated Tracking DataSource for realistic real-time Module 1 demonstration.
 class MockTrackingDataSource implements TrackingDataSource {
+  final SocketService? socketService;
   final Map<String, StreamController<TrackingModel>> _trackingControllers = {};
   final Map<String, StreamController<EtaModel>> _etaControllers = {};
   final Map<String, _AssignedUnit> _assignments = {};
   final List<Timer> _activeTimers = [];
+
+  MockTrackingDataSource({this.socketService});
 
   /// Binds a dispatched unit from a fixed base station to the emergency scene.
   void assignUnit({
@@ -254,6 +259,31 @@ class MockTrackingDataSource implements TrackingDataSource {
     final etaController = _etaControllers[requestId];
     if (etaController != null && !etaController.isClosed && tracking.eta is EtaModel) {
       etaController.add(tracking.eta as EtaModel);
+    }
+
+    // Emit real-time Socket.IO events for live tracking and dynamic ETA
+    if (socketService != null) {
+      final unit = _assignments[requestId];
+      if (unit != null) {
+        socketService!.emitSimulatedEvent('AMBULANCE_LOCATION_UPDATED', {
+          'requestId': requestId,
+          'ambulanceId': unit.ambulanceId,
+          'location': {'latitude': unit.latitude, 'longitude': unit.longitude},
+          'status': unit.status.code,
+        });
+
+        final remainingDistKm = NearbyEmergencyService.distanceKm(
+          unit.latitude,
+          unit.longitude,
+          unit.destLatitude,
+          unit.destLongitude,
+        );
+        socketService!.emitSimulatedEvent('ETA_UPDATED', {
+          'requestId': requestId,
+          'etaMinutes': unit.etaMinutes,
+          'distanceKm': remainingDistKm.toStringAsFixed(1),
+        });
+      }
     }
   }
 

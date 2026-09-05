@@ -27,6 +27,7 @@ class EmergencyRequestRepositoryImpl implements EmergencyRequestRepository {
 
       // Persist active request ID locally for state recovery on restart
       await localDataSource.saveActiveRequestId(created.requestId);
+      await localDataSource.saveRequestToHistory(created);
 
       return created;
     } on ServerException catch (e) {
@@ -65,6 +66,7 @@ class EmergencyRequestRepositoryImpl implements EmergencyRequestRepository {
     try {
       final cancelled = await dataSource.cancelEmergencyRequest(requestId, reason: reason);
       await localDataSource.clearActiveRequestId();
+      await localDataSource.saveRequestToHistory(cancelled);
       return cancelled;
     } catch (e) {
       throw ServerFailure('Failed to cancel request: $e');
@@ -78,6 +80,7 @@ class EmergencyRequestRepositoryImpl implements EmergencyRequestRepository {
       if (!model.status.isActive) {
         localDataSource.clearActiveRequestId();
       }
+      localDataSource.saveRequestToHistory(model);
       return model;
     });
   }
@@ -90,5 +93,10 @@ class EmergencyRequestRepositoryImpl implements EmergencyRequestRepository {
   @override
   Future<void> clearActivePersistedRequest() async {
     await localDataSource.clearActiveRequestId();
+  }
+
+  @override
+  Future<List<EmergencyRequest>> getPastRequests() async {
+    return await localDataSource.getPastRequests();
   }
 }

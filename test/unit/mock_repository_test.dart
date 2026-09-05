@@ -7,8 +7,11 @@ import 'package:uyirkappan_bystander/domain/entities/emergency_type.dart';
 import 'package:uyirkappan_bystander/domain/entities/location_data.dart';
 import 'package:uyirkappan_bystander/domain/entities/request_status.dart';
 
+import 'package:uyirkappan_bystander/data/models/emergency_request_model.dart';
+
 class FakeLocalDataSource implements RequestLocalDataSource {
   String? activeId;
+  final List<EmergencyRequestModel> _history = [];
 
   @override
   Future<void> clearActiveRequestId() async {
@@ -23,6 +26,16 @@ class FakeLocalDataSource implements RequestLocalDataSource {
   @override
   Future<void> saveActiveRequestId(String requestId) async {
     activeId = requestId;
+  }
+
+  @override
+  Future<void> saveRequestToHistory(EmergencyRequestModel request) async {
+    _history.add(request);
+  }
+
+  @override
+  Future<List<EmergencyRequestModel>> getPastRequests() async {
+    return _history;
   }
 }
 

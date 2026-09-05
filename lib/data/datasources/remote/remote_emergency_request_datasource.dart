@@ -6,124 +6,193 @@ import '../../../core/errors/exceptions.dart';
 import '../../models/emergency_request_model.dart';
 import '../../../domain/entities/request_status.dart';
 import '../emergency_request_datasource.dart';
+import 'socket_service.dart';
 
 /// Real REST API implementation adhering strictly to the backend integration contract.
+/// Integrates with Socket.IO for real-time dispatch updates and handles all HTTP status codes:
+/// 400 (Bad Request), 401 (Unauthorized), 403 (Forbidden), 404 (Not Found), 409 (Conflict).
 class RemoteEmergencyRequestDataSource implements EmergencyRequestDataSource {
   final http.Client client;
   final String baseUrl;
+  final Future<String?> Function()? tokenProvider;
+  final SocketService? socketService;
 
   RemoteEmergencyRequestDataSource({
     required this.client,
     this.baseUrl = ApiConstants.defaultBaseUrl,
+    this.tokenProvider,
+    this.socketService,
   });
+
+  Future<Map<String, String>> _getHeaders() async {
+    final headers = <String, String>{
+      ApiConstants.headerContentType: ApiConstants.contentTypeJson,
+    };
+    if (tokenProvider != null) {
+      final token = await tokenProvider!();
+      if (token != null && token.isNotEmpty) {
+        headers[ApiConstants.headerAuthorization] = '${ApiConstants.bearerPrefix}$token';
+      }
+    }
+    return headers;
+  }
 
   @override
   Future<EmergencyRequestModel> createEmergencyRequest(EmergencyRequestModel request) async {
     final uri = Uri.parse('$baseUrl${ApiConstants.emergencyRequests}');
     try {
+      final headers = await _getHeaders();
       final response = await client.post(
         uri,
-        headers: {
-          ApiConstants.headerContentType: ApiConstants.contentTypeJson,
-        },
+        headers: headers,
         body: jsonEncode(request.toSubmissionJson()),
       );
 
       if (response.statusCode == 200 || response.statusCode == 201) {
         final Map<String, dynamic> body = jsonDecode(response.body) as Map<String, dynamic>;
-        return EmergencyRequestModel.fromJson(body);
+        final created = EmergencyRequestModel.fromJson(body);
+        socketService?.joinEmergencyRoom(created.requestId);
+        return created;
       } else {
-        throw ServerException(
-          'Failed to submit emergency request: ${response.body}',
-          response.statusCode,
-        );
+        _handleHttpError(response.statusCode, response.body, 'Failed to submit emergency request');
       }
     } catch (e) {
       if (e is ServerException) rethrow;
       throw NetworkException('Network error during request submission: $e');
     }
+    throw const ServerException('Unknown error submitting request');
   }
 
   @override
   Future<EmergencyRequestModel> getEmergencyRequest(String requestId) async {
     final uri = Uri.parse('$baseUrl${ApiConstants.emergencyRequestById(requestId)}');
     try {
-      final response = await client.get(uri);
+      final headers = await _getHeaders();
+      final response = await client.get(uri, headers: headers);
+
       if (response.statusCode == 200) {
         final Map<String, dynamic> body = jsonDecode(response.body) as Map<String, dynamic>;
         return EmergencyRequestModel.fromJson(body);
       } else {
-        throw ServerException(
-          'Failed to fetch emergency request: ${response.body}',
-          response.statusCode,
-        );
+        _handleHttpError(response.statusCode, response.body, 'Failed to fetch emergency request');
       }
     } catch (e) {
       if (e is ServerException) rethrow;
       throw NetworkException('Network error fetching request: $e');
     }
+    throw const ServerException('Unknown error fetching request');
   }
 
   @override
   Future<RequestStatus> getRequestStatus(String requestId) async {
     final uri = Uri.parse('$baseUrl${ApiConstants.emergencyRequestStatus(requestId)}');
     try {
-      final response = await client.get(uri);
+      final headers = await _getHeaders();
+      final response = await client.get(uri, headers: headers);
+
       if (response.statusCode == 200) {
         final Map<String, dynamic> body = jsonDecode(response.body) as Map<String, dynamic>;
         final statusCode = body['status'] as String? ?? 'SEARCHING';
         return RequestStatus.fromCode(statusCode);
       } else {
-        throw ServerException('Failed to get status', response.statusCode);
+        _handleHttpError(response.statusCode, response.body, 'Failed to get status');
       }
     } catch (e) {
       if (e is ServerException) rethrow;
       throw NetworkException('Network error fetching status: $e');
     }
+    throw const ServerException('Unknown error fetching status');
   }
 
   @override
   Future<EmergencyRequestModel> cancelEmergencyRequest(String requestId, {String? reason}) async {
     final uri = Uri.parse('$baseUrl${ApiConstants.cancelEmergencyRequest(requestId)}');
     try {
+      final headers = await _getHeaders();
       final response = await client.post(
         uri,
-        headers: {ApiConstants.headerContentType: ApiConstants.contentTypeJson},
-        body: jsonEncode({'reason': reason ?? 'Cancelled by user'}),
+        headers: headers,
+        body: jsonEncode({'reason': reason ?? 'Cancelled by bystander'}),
       );
 
       if (response.statusCode == 200) {
         final Map<String, dynamic> body = jsonDecode(response.body) as Map<String, dynamic>;
         return EmergencyRequestModel.fromJson(body);
       } else {
-        throw ServerException('Failed to cancel request', response.statusCode);
+        _handleHttpError(response.statusCode, response.body, 'Failed to cancel request');
       }
     } catch (e) {
       if (e is ServerException) rethrow;
       throw NetworkException('Network error during cancellation: $e');
     }
+    throw const ServerException('Unknown error cancelling request');
   }
 
   @override
   Stream<EmergencyRequestModel> watchRequestUpdates(String requestId) {
-    // In production, this can connect to WebSocket / Server-Sent Events.
-    // For REST fallback, polling stream can be used.
     final controller = StreamController<EmergencyRequestModel>.broadcast();
-    Timer.periodic(const Duration(seconds: 4), (timer) async {
+
+    // 1. Join Socket.IO room
+    socketService?.joinEmergencyRoom(requestId);
+
+    // 2. Listen to real-time events
+    final socketSub = socketService?.eventStream.listen((event) async {
+      try {
+        final req = await getEmergencyRequest(requestId);
+        if (!controller.isClosed) {
+          controller.add(req);
+        }
+      } catch (_) {}
+    });
+
+    // 3. Fallback Polling Timer (ensures data sync if WebSocket drops)
+    final pollTimer = Timer.periodic(const Duration(seconds: 4), (timer) async {
       if (controller.isClosed) {
         timer.cancel();
         return;
       }
       try {
         final req = await getEmergencyRequest(requestId);
-        controller.add(req);
-        if (!req.status.isActive) {
-          timer.cancel();
+        if (!controller.isClosed) {
+          controller.add(req);
+          if (!req.status.isActive) {
+            timer.cancel();
+          }
         }
-      } catch (_) {
-        // Keep stream open on temporary network blips
-      }
+      } catch (_) {}
     });
+
+    controller.onCancel = () {
+      socketSub?.cancel();
+      pollTimer.cancel();
+      socketService?.leaveEmergencyRoom();
+    };
+
     return controller.stream;
+  }
+
+  void _handleHttpError(int statusCode, String body, String context) {
+    String message = body;
+    try {
+      final parsed = jsonDecode(body);
+      if (parsed is Map && parsed.containsKey('message')) {
+        message = parsed['message'].toString();
+      }
+    } catch (_) {}
+
+    switch (statusCode) {
+      case 400:
+        throw ServerException('Invalid request ($message)', 400, 'BAD_REQUEST');
+      case 401:
+        throw const ServerException('Session expired or unauthorized. Please re-login.', 401, 'UNAUTHORIZED');
+      case 403:
+        throw const ServerException('Access forbidden: Bystander role required.', 403, 'FORBIDDEN');
+      case 404:
+        throw const ServerException('Emergency request not found.', 404, 'NOT_FOUND');
+      case 409:
+        throw const ServerException('Emergency cannot be cancelled in its current state.', 409, 'CONFLICT');
+      default:
+        throw ServerException('$context ($statusCode): $message', statusCode);
+    }
   }
 }

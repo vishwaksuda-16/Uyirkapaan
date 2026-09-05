@@ -14,6 +14,7 @@ class EmergencyRequestModel extends EmergencyRequest {
     required super.emergencyLocation,
     super.requesterLocation,
     required super.createdAt,
+    super.completedAt,
     required super.status,
     super.assignedAmbulanceId,
     super.assignedDriverName,
@@ -21,6 +22,7 @@ class EmergencyRequestModel extends EmergencyRequest {
     super.hospitalDestination,
     super.additionalNotes,
     super.fallbackCount,
+    super.currentETA,
     super.t0UserPressed,
     super.t1RequestReceived,
     super.t2MatchingCompleted,
@@ -31,10 +33,19 @@ class EmergencyRequestModel extends EmergencyRequest {
   });
 
   factory EmergencyRequestModel.fromJson(Map<String, dynamic> json) {
-    // Accommodate nested or flat location representations from backend
+    // Accommodate pickupLocation (Backend standard), emergencyLocation, or flat lat/lng
     final LocationData emergencyLoc;
-    if (json['emergencyLocation'] != null) {
-      emergencyLoc = LocationModel.fromJson(json['emergencyLocation'] as Map<String, dynamic>);
+    final locObj = json['pickupLocation'] ?? json['emergencyLocation'];
+    if (locObj is Map<String, dynamic>) {
+      emergencyLoc = LocationData(
+        latitude: (locObj['latitude'] as num?)?.toDouble() ?? 0.0,
+        longitude: (locObj['longitude'] as num?)?.toDouble() ?? 0.0,
+        accuracy: (locObj['accuracy'] as num?)?.toDouble() ?? (locObj['locationAccuracy'] as num?)?.toDouble(),
+        timestamp: json['createdAt'] != null
+            ? DateTime.parse(json['createdAt'] as String)
+            : DateTime.now(),
+        isManualOverride: locObj['isManualOverride'] as bool? ?? false,
+      );
     } else {
       emergencyLoc = LocationData(
         latitude: (json['latitude'] as num?)?.toDouble() ?? 0.0,
@@ -48,12 +59,17 @@ class EmergencyRequestModel extends EmergencyRequest {
     }
 
     LocationData? requesterLoc;
-    if (json['requesterLocation'] != null) {
+    if (json['requesterLocation'] != null && json['requesterLocation'] is Map<String, dynamic>) {
       requesterLoc = LocationModel.fromJson(json['requesterLocation'] as Map<String, dynamic>);
     }
 
+    final ambId = json['ambulanceId'] as String? ?? json['assignedAmbulanceId'] as String?;
+    final hospDest = json['destinationHospitalId'] as String? ?? json['hospitalDestination'] as String?;
+    final fallbackAttempts = (json['attempts'] as num?)?.toInt() ?? json['fallbackCount'] as int? ?? 0;
+    final etaVal = (json['currentETA'] as num?)?.toInt() ?? (json['eta'] as num?)?.toInt();
+
     return EmergencyRequestModel(
-      requestId: json['requestId'] as String? ?? 'UK-${DateTime.now().millisecondsSinceEpoch}',
+      requestId: json['requestId'] as String? ?? json['id'] as String? ?? 'UK-${DateTime.now().millisecondsSinceEpoch}',
       requesterId: json['requesterId'] as String? ?? 'anonymous',
       emergencyType: EmergencyType.fromCode(json['emergencyType'] as String? ?? 'OTHER'),
       victimCount: json['victimCount'] as int? ?? 1,
@@ -62,13 +78,17 @@ class EmergencyRequestModel extends EmergencyRequest {
       createdAt: json['createdAt'] != null
           ? DateTime.parse(json['createdAt'] as String)
           : DateTime.now(),
+      completedAt: json['completedAt'] != null
+          ? DateTime.parse(json['completedAt'] as String)
+          : null,
       status: RequestStatus.fromCode(json['status'] as String? ?? 'CREATED'),
-      assignedAmbulanceId: json['assignedAmbulanceId'] as String?,
+      assignedAmbulanceId: ambId,
       assignedDriverName: json['assignedDriverName'] as String?,
       driverPhone: json['driverPhone'] as String?,
-      hospitalDestination: json['hospitalDestination'] as String?,
+      hospitalDestination: hospDest,
       additionalNotes: json['additionalNotes'] as String?,
-      fallbackCount: json['fallbackCount'] as int? ?? 0,
+      fallbackCount: fallbackAttempts,
+      currentETA: etaVal,
       t0UserPressed: json['t0UserPressed'] != null ? DateTime.parse(json['t0UserPressed'] as String) : null,
       t1RequestReceived: json['t1RequestReceived'] != null ? DateTime.parse(json['t1RequestReceived'] as String) : null,
       t2MatchingCompleted: json['t2MatchingCompleted'] != null ? DateTime.parse(json['t2MatchingCompleted'] as String) : null,
@@ -88,6 +108,7 @@ class EmergencyRequestModel extends EmergencyRequest {
       emergencyLocation: entity.emergencyLocation,
       requesterLocation: entity.requesterLocation,
       createdAt: entity.createdAt,
+      completedAt: entity.completedAt,
       status: entity.status,
       assignedAmbulanceId: entity.assignedAmbulanceId,
       assignedDriverName: entity.assignedDriverName,
@@ -95,6 +116,7 @@ class EmergencyRequestModel extends EmergencyRequest {
       hospitalDestination: entity.hospitalDestination,
       additionalNotes: entity.additionalNotes,
       fallbackCount: entity.fallbackCount,
+      currentETA: entity.currentETA,
       t0UserPressed: entity.t0UserPressed,
       t1RequestReceived: entity.t1RequestReceived,
       t2MatchingCompleted: entity.t2MatchingCompleted,
@@ -114,6 +136,7 @@ class EmergencyRequestModel extends EmergencyRequest {
     LocationData? emergencyLocation,
     LocationData? requesterLocation,
     DateTime? createdAt,
+    DateTime? completedAt,
     RequestStatus? status,
     String? assignedAmbulanceId,
     String? assignedDriverName,
@@ -121,6 +144,7 @@ class EmergencyRequestModel extends EmergencyRequest {
     String? hospitalDestination,
     String? additionalNotes,
     int? fallbackCount,
+    int? currentETA,
     DateTime? t0UserPressed,
     DateTime? t1RequestReceived,
     DateTime? t2MatchingCompleted,
@@ -137,6 +161,7 @@ class EmergencyRequestModel extends EmergencyRequest {
       emergencyLocation: emergencyLocation ?? this.emergencyLocation,
       requesterLocation: requesterLocation ?? this.requesterLocation,
       createdAt: createdAt ?? this.createdAt,
+      completedAt: completedAt ?? this.completedAt,
       status: status ?? this.status,
       assignedAmbulanceId: assignedAmbulanceId ?? this.assignedAmbulanceId,
       assignedDriverName: assignedDriverName ?? this.assignedDriverName,
@@ -144,6 +169,7 @@ class EmergencyRequestModel extends EmergencyRequest {
       hospitalDestination: hospitalDestination ?? this.hospitalDestination,
       additionalNotes: additionalNotes ?? this.additionalNotes,
       fallbackCount: fallbackCount ?? this.fallbackCount,
+      currentETA: currentETA ?? this.currentETA,
       t0UserPressed: t0UserPressed ?? this.t0UserPressed,
       t1RequestReceived: t1RequestReceived ?? this.t1RequestReceived,
       t2MatchingCompleted: t2MatchingCompleted ?? this.t2MatchingCompleted,
@@ -165,13 +191,18 @@ class EmergencyRequestModel extends EmergencyRequest {
       'locationAccuracy': emergencyLocation.accuracy,
       'isManualOverride': emergencyLocation.isManualOverride,
       'createdAt': createdAt.toIso8601String(),
+      if (completedAt != null) 'completedAt': completedAt!.toIso8601String(),
       'status': status.code,
       if (assignedAmbulanceId != null) 'assignedAmbulanceId': assignedAmbulanceId,
+      if (assignedAmbulanceId != null) 'ambulanceId': assignedAmbulanceId,
       if (assignedDriverName != null) 'assignedDriverName': assignedDriverName,
       if (driverPhone != null) 'driverPhone': driverPhone,
       if (hospitalDestination != null) 'hospitalDestination': hospitalDestination,
+      if (hospitalDestination != null) 'destinationHospitalId': hospitalDestination,
       if (additionalNotes != null) 'additionalNotes': additionalNotes,
       'fallbackCount': fallbackCount,
+      'attempts': fallbackCount,
+      if (currentETA != null) 'currentETA': currentETA,
       if (t0UserPressed != null) 't0UserPressed': t0UserPressed!.toIso8601String(),
       if (t1RequestReceived != null) 't1RequestReceived': t1RequestReceived!.toIso8601String(),
       if (t2MatchingCompleted != null) 't2MatchingCompleted': t2MatchingCompleted!.toIso8601String(),
@@ -182,16 +213,23 @@ class EmergencyRequestModel extends EmergencyRequest {
     };
   }
 
-  /// Format specifically for POST /api/emergency-requests endpoint.
+  /// Format specifically for POST /api/emergency endpoint.
+  /// Payload: { "emergencyType": "...", "victimCount": ..., "pickupLocation": { "latitude": ..., "longitude": ... } }
   Map<String, dynamic> toSubmissionJson() {
     return {
-      'requesterId': requesterId,
       'emergencyType': emergencyType.code,
       'victimCount': victimCount,
+      'pickupLocation': {
+        'latitude': emergencyLocation.latitude,
+        'longitude': emergencyLocation.longitude,
+        if (emergencyLocation.accuracy != null) 'accuracy': emergencyLocation.accuracy,
+      },
+      // Flat coordinates included for compatibility
       'latitude': emergencyLocation.latitude,
       'longitude': emergencyLocation.longitude,
       'locationAccuracy': emergencyLocation.accuracy,
       'isManualOverride': emergencyLocation.isManualOverride,
+      if (requesterId.isNotEmpty) 'requesterId': requesterId,
       if (additionalNotes != null && additionalNotes!.isNotEmpty)
         'additionalNotes': additionalNotes,
       if (t0UserPressed != null) 't0UserPressed': t0UserPressed!.toIso8601String(),

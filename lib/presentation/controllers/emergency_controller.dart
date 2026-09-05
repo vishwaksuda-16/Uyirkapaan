@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import '../../core/constants/app_constants.dart';
 import '../../core/errors/failures.dart';
+import '../../data/datasources/remote/socket_service.dart';
 import '../../domain/entities/emergency_request.dart';
 import '../../domain/entities/emergency_type.dart';
 import '../../domain/entities/location_data.dart';
@@ -21,6 +22,7 @@ enum SubmissionState {
 /// request submission, real-time lifecycle tracking, and persistent session recovery.
 class EmergencyController extends ChangeNotifier {
   final EmergencyRequestRepository repository;
+  final SocketService? socketService;
 
   // Form State
   EmergencyType _selectedType = EmergencyType.accident;
@@ -31,13 +33,22 @@ class EmergencyController extends ChangeNotifier {
   SubmissionState _submissionState = SubmissionState.idle;
   EmergencyRequest? _activeRequest;
   String? _errorMessage;
+  int? _lastErrorCode;
   StreamSubscription<EmergencyRequest>? _requestSubscription;
+  StreamSubscription<SocketEvent>? _socketEventSubscription;
+
+  // Notifications & Realtime Event Stream
+  String? _latestNotification;
+  final List<String> _notifications = [];
 
   // Timers
   DateTime? _t0ClientPressTime;
 
-  EmergencyController({required this.repository}) {
-    // Attempt session recovery on startup
+  EmergencyController({
+    required this.repository,
+    this.socketService,
+  }) {
+    _initSocketEvents();
     recoverActiveSession();
   }
 
@@ -48,7 +59,74 @@ class EmergencyController extends ChangeNotifier {
   SubmissionState get submissionState => _submissionState;
   EmergencyRequest? get activeRequest => _activeRequest;
   String? get errorMessage => _errorMessage;
+  int? get lastErrorCode => _lastErrorCode;
   bool get hasActiveRequest => _activeRequest != null && _activeRequest!.status.isActive;
+  String? get latestNotification => _latestNotification;
+  List<String> get notifications => List.unmodifiable(_notifications);
+
+  void _initSocketEvents() {
+    if (socketService == null) return;
+    _socketEventSubscription = socketService!.eventStream.listen((event) {
+      _handleSocketEvent(event);
+    });
+  }
+
+  void _handleSocketEvent(SocketEvent event) {
+    String notif = '';
+    switch (event.event) {
+      case 'EMERGENCY_CREATED':
+        final reqId = event.data['requestId'] ?? _activeRequest?.requestId ?? '';
+        notif = 'Emergency created: $reqId';
+        break;
+      case 'AMBULANCE_ASSIGNED':
+        final ambId = event.data['ambulanceId'] ?? event.data['assignedAmbulanceId'] ?? 'AMB';
+        final eta = event.data['eta'] ?? event.data['currentETA'] ?? '5';
+        notif = 'Ambulance $ambId assigned. ETA: $eta minutes';
+        break;
+      case 'ASSIGNMENT_ACCEPTED':
+        notif = 'Driver accepted. En route to pickup';
+        break;
+      case 'AMBULANCE_LOCATION_UPDATED':
+        // Silently handled by map tracking
+        return;
+      case 'ETA_UPDATED':
+        final etaMin = event.data['etaMinutes'] ?? event.data['eta'] ?? event.data['currentETA'];
+        if (etaMin != null) {
+          notif = 'ETA updated: $etaMin minutes';
+          if (_activeRequest != null) {
+            _activeRequest = _activeRequest!.copyWith(currentETA: (etaMin as num).toInt());
+            notifyListeners();
+          }
+        }
+        return;
+      case 'STATUS_UPDATED':
+        final st = event.data['status'] ?? '';
+        notif = 'Status updated: $st';
+        break;
+      case 'FALLBACK_STARTED':
+        notif = 'Finding another available ambulance...';
+        break;
+      case 'AMBULANCE_REASSIGNED':
+        final ambId = event.data['ambulanceId'] ?? event.data['assignedAmbulanceId'] ?? 'AMB';
+        final eta = event.data['eta'] ?? event.data['currentETA'] ?? '4';
+        notif = 'Ambulance reassigned to $ambId. New ETA: $eta minutes';
+        break;
+      case 'AMBULANCE_ARRIVED':
+        notif = 'Ambulance has arrived at your location';
+        break;
+      case 'EMERGENCY_COMPLETED':
+        notif = 'Emergency response completed';
+        break;
+      default:
+        notif = '${event.event}: ${event.data}';
+    }
+
+    if (notif.isNotEmpty) {
+      _latestNotification = notif;
+      _notifications.insert(0, '[${DateTime.now().toIso8601String().substring(11, 19)}] $notif');
+      notifyListeners();
+    }
+  }
 
   // Form Mutators
   void setEmergencyType(EmergencyType type) {
@@ -91,6 +169,7 @@ class EmergencyController extends ChangeNotifier {
   Future<bool> submitEmergencyRequest({
     required LocationData emergencyLocation,
     LocationData? requesterLocation,
+    String? requesterId,
   }) async {
     // 1. Validation
     if (_victimCount < AppConstants.minVictims) {
@@ -101,13 +180,14 @@ class EmergencyController extends ChangeNotifier {
 
     _submissionState = SubmissionState.submitting;
     _errorMessage = null;
+    _lastErrorCode = null;
     notifyListeners();
 
     final t0 = _t0ClientPressTime ?? DateTime.now();
 
     final draft = EmergencyRequest(
-      requestId: '', // Will be assigned by backend/mock
-      requesterId: '',
+      requestId: '',
+      requesterId: requesterId ?? '',
       emergencyType: _selectedType,
       victimCount: _victimCount,
       emergencyLocation: emergencyLocation,
@@ -123,11 +203,20 @@ class EmergencyController extends ChangeNotifier {
       _activeRequest = created;
       _submissionState = SubmissionState.active;
       _subscribeToUpdates(created.requestId);
+      _latestNotification = 'Emergency request registered: ${created.requestId}';
+      _notifications.insert(0, _latestNotification!);
       notifyListeners();
       return true;
-    } on Failure catch (f) {
+    } on ServerFailure catch (f) {
       _submissionState = SubmissionState.error;
       _errorMessage = f.message;
+      _lastErrorCode = f.statusCode;
+      notifyListeners();
+      return false;
+    } on NetworkFailure catch (f) {
+      _submissionState = SubmissionState.error;
+      _errorMessage = f.message;
+      _lastErrorCode = 503;
       notifyListeners();
       return false;
     } catch (e) {
@@ -154,14 +243,20 @@ class EmergencyController extends ChangeNotifier {
         }
       }
     } catch (_) {
-      // If recovery fails (e.g. invalid cached id), gracefully clear it
       await repository.clearActivePersistedRequest();
     }
   }
 
   /// Cancels the currently active emergency request.
+  /// Section 11: Cancel is only allowed when status is SEARCHING, ASSIGNED, DRIVER_ACCEPTED, EN_ROUTE_TO_PATIENT.
   Future<bool> cancelActiveRequest({String? reason}) async {
     if (_activeRequest == null) return false;
+
+    if (!_activeRequest!.status.canCancel) {
+      _errorMessage = 'Cannot cancel emergency at stage ${_activeRequest!.status.userMessage}';
+      notifyListeners();
+      return false;
+    }
 
     try {
       final cancelled = await repository.cancelEmergencyRequest(
@@ -171,12 +266,28 @@ class EmergencyController extends ChangeNotifier {
       _activeRequest = cancelled;
       _submissionState = SubmissionState.cancelled;
       _unsubscribe();
+      _latestNotification = 'Emergency cancelled';
+      _notifications.insert(0, _latestNotification!);
       notifyListeners();
       return true;
+    } on ServerFailure catch (f) {
+      _errorMessage = f.message;
+      _lastErrorCode = f.statusCode;
+      notifyListeners();
+      return false;
     } catch (e) {
       _errorMessage = 'Failed to cancel request: $e';
       notifyListeners();
       return false;
+    }
+  }
+
+  /// Fetches past emergency requests from history (Section 13).
+  Future<List<EmergencyRequest>> getPastRequests() async {
+    try {
+      return await repository.getPastRequests();
+    } catch (_) {
+      return [];
     }
   }
 
@@ -186,10 +297,12 @@ class EmergencyController extends ChangeNotifier {
     _submissionState = SubmissionState.idle;
     _activeRequest = null;
     _errorMessage = null;
+    _lastErrorCode = null;
     _victimCount = AppConstants.defaultVictims;
     _selectedType = EmergencyType.accident;
     _additionalNotes = '';
     _t0ClientPressTime = null;
+    _latestNotification = null;
     notifyListeners();
   }
 
@@ -216,9 +329,21 @@ class EmergencyController extends ChangeNotifier {
     _requestSubscription = null;
   }
 
+  void clearNotification() {
+    _latestNotification = null;
+    notifyListeners();
+  }
+
+  void clearError() {
+    _errorMessage = null;
+    _lastErrorCode = null;
+    notifyListeners();
+  }
+
   @override
   void dispose() {
     _unsubscribe();
+    _socketEventSubscription?.cancel();
     super.dispose();
   }
 }

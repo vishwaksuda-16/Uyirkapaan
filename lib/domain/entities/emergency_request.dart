@@ -3,6 +3,9 @@ import 'location_data.dart';
 import 'request_status.dart';
 
 /// Core business entity representing an emergency incident request.
+/// Adheres strictly to backend schema:
+/// requestId, emergencyType, victimCount, pickupLocation, destinationHospitalId,
+/// assignedAmbulanceId, status, currentETA, attempts.
 class EmergencyRequest {
   final String requestId;
   final String requesterId;
@@ -11,6 +14,7 @@ class EmergencyRequest {
   final LocationData emergencyLocation;
   final LocationData? requesterLocation;
   final DateTime createdAt;
+  final DateTime? completedAt;
   final RequestStatus status;
   final String? assignedAmbulanceId;
   final String? assignedDriverName;
@@ -18,6 +22,7 @@ class EmergencyRequest {
   final String? hospitalDestination;
   final String? additionalNotes;
   final int fallbackCount;
+  final int? currentETA;
 
   // Evaluation Timestamps (for response-time analytics: T0 - T6)
   final DateTime? t0UserPressed;
@@ -36,6 +41,7 @@ class EmergencyRequest {
     required this.emergencyLocation,
     this.requesterLocation,
     required this.createdAt,
+    this.completedAt,
     required this.status,
     this.assignedAmbulanceId,
     this.assignedDriverName,
@@ -43,6 +49,7 @@ class EmergencyRequest {
     this.hospitalDestination,
     this.additionalNotes,
     this.fallbackCount = 0,
+    this.currentETA,
     this.t0UserPressed,
     this.t1RequestReceived,
     this.t2MatchingCompleted,
@@ -52,6 +59,9 @@ class EmergencyRequest {
     this.t6AmbulanceArrived,
   });
 
+  /// Alias for fallback history as named in backend API response
+  int get attempts => fallbackCount;
+
   EmergencyRequest copyWith({
     String? requestId,
     String? requesterId,
@@ -60,6 +70,7 @@ class EmergencyRequest {
     LocationData? emergencyLocation,
     LocationData? requesterLocation,
     DateTime? createdAt,
+    DateTime? completedAt,
     RequestStatus? status,
     String? assignedAmbulanceId,
     String? assignedDriverName,
@@ -67,6 +78,7 @@ class EmergencyRequest {
     String? hospitalDestination,
     String? additionalNotes,
     int? fallbackCount,
+    int? currentETA,
     DateTime? t0UserPressed,
     DateTime? t1RequestReceived,
     DateTime? t2MatchingCompleted,
@@ -83,6 +95,7 @@ class EmergencyRequest {
       emergencyLocation: emergencyLocation ?? this.emergencyLocation,
       requesterLocation: requesterLocation ?? this.requesterLocation,
       createdAt: createdAt ?? this.createdAt,
+      completedAt: completedAt ?? this.completedAt,
       status: status ?? this.status,
       assignedAmbulanceId: assignedAmbulanceId ?? this.assignedAmbulanceId,
       assignedDriverName: assignedDriverName ?? this.assignedDriverName,
@@ -90,6 +103,7 @@ class EmergencyRequest {
       hospitalDestination: hospitalDestination ?? this.hospitalDestination,
       additionalNotes: additionalNotes ?? this.additionalNotes,
       fallbackCount: fallbackCount ?? this.fallbackCount,
+      currentETA: currentETA ?? this.currentETA,
       t0UserPressed: t0UserPressed ?? this.t0UserPressed,
       t1RequestReceived: t1RequestReceived ?? this.t1RequestReceived,
       t2MatchingCompleted: t2MatchingCompleted ?? this.t2MatchingCompleted,

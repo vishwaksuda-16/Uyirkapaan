@@ -3,6 +3,7 @@ class RoutePaths {
   RoutePaths._();
 
   static const String home = '/';
+  static const String auth = '/auth';
   static const String locationPicker = '/location-picker';
   static const String emergencyDetails = '/emergency-details';
   static const String reviewRequest = '/review-request';

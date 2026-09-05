@@ -38,6 +38,14 @@ class LocationController extends ChangeNotifier {
   LocationFetchStatus get status => _status;
   LocationData? get deviceLocation => _deviceLocation;
   LocationData? get emergencyLocation => _emergencyLocation ?? _deviceLocation;
+  LocationData get currentLocation =>
+      emergencyLocation ??
+      _deviceLocation ??
+      LocationData(
+        latitude: AppConstants.defaultLatitude,
+        longitude: AppConstants.defaultLongitude,
+        timestamp: DateTime.now(),
+      );
   String? get errorMessage => _errorMessage;
   bool get isLocationReady => emergencyLocation != null;
   bool get isManualOverride => _emergencyLocation?.isManualOverride ?? false;

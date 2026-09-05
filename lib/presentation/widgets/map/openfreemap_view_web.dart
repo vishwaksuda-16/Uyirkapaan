@@ -39,6 +39,18 @@ class PlatformOpenFreeMapView extends StatefulWidget {
     this.onLocationPicked,
   });
 
+  static DateTime? _suppressUntil;
+
+  static void suppressClicks([int ms = 600]) {
+    _suppressUntil = DateTime.now().add(Duration(milliseconds: ms));
+    try {
+      final value = js.context['uyirkappanMaps'];
+      if (value is js.JsObject && value.hasProperty('suppressAllClicks')) {
+        value.callMethod('suppressAllClicks', [ms]);
+      }
+    } catch (_) {}
+  }
+
   @override
   State<PlatformOpenFreeMapView> createState() => _PlatformOpenFreeMapViewState();
 }
@@ -105,7 +117,10 @@ class _PlatformOpenFreeMapViewState extends State<PlatformOpenFreeMapView> {
 
   void _onJsLocationPicked(dynamic lat, dynamic lng) {
     if (!widget.isPickerMode) {
-      debugPrint('Location event ignored because isPickerMode is false');
+      return;
+    }
+    if (PlatformOpenFreeMapView._suppressUntil != null &&
+        DateTime.now().isBefore(PlatformOpenFreeMapView._suppressUntil!)) {
       return;
     }
     if (lat is num && lng is num && widget.onLocationPicked != null) {
@@ -283,10 +298,13 @@ class _PlatformOpenFreeMapViewState extends State<PlatformOpenFreeMapView> {
       _updateStyle();
     }
 
+    final isRecenter = oldWidget.recenterTrigger != widget.recenterTrigger;
+    final isInitial = oldWidget.incidentLocation == null && widget.incidentLocation != null;
+
     if (oldWidget.incidentLocation?.latitude != widget.incidentLocation?.latitude ||
         oldWidget.incidentLocation?.longitude != widget.incidentLocation?.longitude ||
-        oldWidget.recenterTrigger != widget.recenterTrigger) {
-      _updateIncident(fly: true);
+        isRecenter) {
+      _updateIncident(fly: isRecenter || isInitial);
     }
 
     if (oldWidget.ambulanceLocation != widget.ambulanceLocation ||

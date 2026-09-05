@@ -12,22 +12,22 @@ enum RequestStatus {
   ),
   searching(
     code: 'SEARCHING',
-    userMessage: 'Searching for Ambulance',
-    userDescription: 'Finding the nearest available emergency vehicle...',
+    userMessage: 'Searching for an ambulance...',
+    userDescription: 'Finding the nearest available emergency vehicle in Chennai network...',
     color: AppColors.statusSearching,
     isActive: true,
   ),
   assigned(
     code: 'ASSIGNED',
-    userMessage: 'Ambulance Assigned',
-    userDescription: 'Ambulance assigned. Awaiting driver response...',
+    userMessage: 'Ambulance assigned, waiting for driver confirmation',
+    userDescription: 'Emergency unit assigned. Waiting for driver to confirm response...',
     color: AppColors.statusAssigned,
     isActive: true,
   ),
   accepted(
-    code: 'ACCEPTED',
-    userMessage: 'Driver Accepted',
-    userDescription: 'Ambulance driver has confirmed and is preparing to depart.',
+    code: 'DRIVER_ACCEPTED',
+    userMessage: 'Driver accepted, en route to pickup',
+    userDescription: 'Ambulance driver has confirmed and is en route to pickup location.',
     color: AppColors.statusAccepted,
     isActive: true,
   ),
@@ -40,50 +40,50 @@ enum RequestStatus {
   ),
   arrivedAtPatient(
     code: 'ARRIVED_AT_PATIENT',
-    userMessage: 'Ambulance Arrived at Scene',
+    userMessage: 'Ambulance has arrived',
     userDescription: 'Paramedics have reached the emergency location.',
     color: AppColors.statusArrived,
     isActive: true,
   ),
   patientOnboard(
     code: 'PATIENT_ONBOARD',
-    userMessage: 'Patient Onboard',
-    userDescription: 'Patient is receiving medical care inside the ambulance.',
+    userMessage: 'Patient onboard, proceeding to hospital',
+    userDescription: 'Patient is stabilized inside unit and proceeding to hospital.',
     color: AppColors.statusEnRoute,
     isActive: true,
   ),
   enRouteToHospital(
     code: 'EN_ROUTE_TO_HOSPITAL',
-    userMessage: 'En Route to Hospital',
-    userDescription: 'Ambulance is navigating to the destination hospital.',
+    userMessage: 'En route to hospital',
+    userDescription: 'Ambulance is navigating along green corridor to destination hospital.',
     color: AppColors.statusEnRoute,
     isActive: true,
   ),
   arrivedAtHospital(
     code: 'ARRIVED_AT_HOSPITAL',
-    userMessage: 'Arrived at Hospital',
-    userDescription: 'Ambulance has safely reached the emergency ward.',
+    userMessage: 'Arrived at hospital',
+    userDescription: 'Ambulance has safely reached the emergency trauma bay.',
     color: AppColors.statusCompleted,
     isActive: true,
   ),
   completed(
     code: 'COMPLETED',
-    userMessage: 'Emergency Completed',
+    userMessage: 'Emergency response completed',
     userDescription: 'The emergency response case has been successfully closed.',
     color: AppColors.statusCompleted,
     isActive: false,
   ),
   cancelled(
     code: 'CANCELLED',
-    userMessage: 'Request Cancelled',
+    userMessage: 'Emergency cancelled',
     userDescription: 'This emergency request was cancelled by the requester or operator.',
     color: AppColors.statusCancelled,
     isActive: false,
   ),
   noAmbulanceAvailable(
     code: 'NO_AMBULANCE_AVAILABLE',
-    userMessage: 'No Ambulance Available',
-    userDescription: 'All local emergency vehicles are currently busy. Please call emergency services immediately.',
+    userMessage: 'No ambulance currently available',
+    userDescription: 'All local emergency vehicles are currently busy. Please call 108 helpline immediately.',
     color: AppColors.emergencyRed,
     isActive: false,
   );
@@ -102,9 +102,21 @@ enum RequestStatus {
     required this.isActive,
   });
 
+  /// Section 11: Cancellation is only allowed when status is:
+  /// SEARCHING, ASSIGNED, DRIVER_ACCEPTED, EN_ROUTE_TO_PATIENT.
+  bool get canCancel =>
+      this == RequestStatus.searching ||
+      this == RequestStatus.assigned ||
+      this == RequestStatus.accepted ||
+      this == RequestStatus.enRouteToPatient;
+
   static RequestStatus fromCode(String code) {
+    final normalized = code.trim().toUpperCase();
+    if (normalized == 'DRIVER_ACCEPTED' || normalized == 'ACCEPTED') {
+      return RequestStatus.accepted;
+    }
     return RequestStatus.values.firstWhere(
-      (s) => s.code.toUpperCase() == code.toUpperCase(),
+      (s) => s.code.toUpperCase() == normalized,
       orElse: () => RequestStatus.searching,
     );
   }

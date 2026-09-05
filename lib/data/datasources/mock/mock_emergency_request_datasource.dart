@@ -6,6 +6,8 @@ import '../../../domain/entities/request_status.dart';
 import '../emergency_request_datasource.dart';
 import 'mock_tracking_datasource.dart';
 
+import '../remote/socket_service.dart';
+
 /// Available demonstration scenarios for college viva / paper / system testing.
 enum SimulationScenarioType {
   normalDispatch,
@@ -23,11 +25,15 @@ class MockEmergencyRequestDataSource implements EmergencyRequestDataSource {
   final Map<String, StreamController<EmergencyRequestModel>> _streamControllers = {};
   final List<Timer> _activeTimers = [];
   final MockTrackingDataSource? trackingDataSource;
+  final SocketService? socketService;
 
   SimulationScenarioType activeScenario = SimulationScenarioType.normalDispatch;
   bool isFastSimulation = true;
 
-  MockEmergencyRequestDataSource({this.trackingDataSource});
+  MockEmergencyRequestDataSource({
+    this.trackingDataSource,
+    this.socketService,
+  });
 
   @override
   Future<EmergencyRequestModel> createEmergencyRequest(EmergencyRequestModel request) async {
@@ -52,6 +58,11 @@ class MockEmergencyRequestDataSource implements EmergencyRequestDataSource {
     );
 
     _inMemoryStore[generatedId] = createdModel;
+
+    socketService?.emitSimulatedEvent('EMERGENCY_CREATED', {
+      'requestId': generatedId,
+      'status': 'SEARCHING',
+    });
 
     // Start lifecycle simulation according to the selected scenario
     _startScenarioLifecycle(generatedId, activeScenario);
@@ -309,6 +320,11 @@ class MockEmergencyRequestDataSource implements EmergencyRequestDataSource {
         );
         _updateAndEmit(updated2);
         trackingDataSource?.clearUnit(requestId);
+        socketService?.emitSimulatedEvent('FALLBACK_STARTED', {
+          'requestId': requestId,
+          'attempts': req2.fallbackCount + 1,
+          'message': 'Finding another available ambulance...',
+        });
 
         // 3. Fallback Dispatch -> Assigned Secondary Ambulance from CSV (Unit 2 in focus)
         _schedule(const Duration(seconds: 3), () {
@@ -326,6 +342,12 @@ class MockEmergencyRequestDataSource implements EmergencyRequestDataSource {
           );
           _updateAndEmit(updated3);
           _bindTracking(updated3, startLat: amb2.latitude, startLng: amb2.longitude, hospitalName: nearestHosp.name);
+          socketService?.emitSimulatedEvent('AMBULANCE_REASSIGNED', {
+            'requestId': requestId,
+            'ambulanceId': amb2.id,
+            'eta': 4,
+            'attempts': req2.fallbackCount + 1,
+          });
 
           // 4. Driver 2 Accepts
           _schedule(const Duration(seconds: 2), () {
@@ -448,6 +470,11 @@ class MockEmergencyRequestDataSource implements EmergencyRequestDataSource {
         );
         _updateAndEmit(updated2);
         trackingDataSource?.clearUnit(requestId);
+        socketService?.emitSimulatedEvent('FALLBACK_STARTED', {
+          'requestId': requestId,
+          'attempts': req2.fallbackCount + 1,
+          'message': 'Finding another available ambulance...',
+        });
 
         // Reassign secondary vehicle (amb2 in focus)
         _schedule(const Duration(seconds: 3), () {
@@ -465,6 +492,12 @@ class MockEmergencyRequestDataSource implements EmergencyRequestDataSource {
           );
           _updateAndEmit(updated3);
           _bindTracking(updated3, startLat: amb2.latitude, startLng: amb2.longitude, hospitalName: nearestHosp.name);
+          socketService?.emitSimulatedEvent('AMBULANCE_REASSIGNED', {
+            'requestId': requestId,
+            'ambulanceId': amb2.id,
+            'eta': 4,
+            'attempts': req2.fallbackCount + 1,
+          });
 
           // Driver 2 Accepts -> En Route -> Hospital
           _schedule(const Duration(seconds: 2), () {
@@ -578,6 +611,73 @@ class MockEmergencyRequestDataSource implements EmergencyRequestDataSource {
       final controller = _streamControllers[updated.requestId]!;
       if (!controller.isClosed) {
         controller.add(updated);
+      }
+    }
+
+    if (socketService != null) {
+      switch (updated.status) {
+        case RequestStatus.assigned:
+          socketService!.emitSimulatedEvent('AMBULANCE_ASSIGNED', {
+            'requestId': updated.requestId,
+            'ambulanceId': updated.assignedAmbulanceId,
+            'eta': updated.currentETA ?? 5,
+          });
+          break;
+        case RequestStatus.accepted:
+          socketService!.emitSimulatedEvent('ASSIGNMENT_ACCEPTED', {
+            'requestId': updated.requestId,
+            'ambulanceId': updated.assignedAmbulanceId,
+          });
+          break;
+        case RequestStatus.enRouteToPatient:
+          socketService!.emitSimulatedEvent('STATUS_UPDATED', {
+            'requestId': updated.requestId,
+            'status': 'EN_ROUTE_TO_PATIENT',
+          });
+          break;
+        case RequestStatus.arrivedAtPatient:
+          socketService!.emitSimulatedEvent('AMBULANCE_ARRIVED', {
+            'requestId': updated.requestId,
+            'ambulanceId': updated.assignedAmbulanceId,
+          });
+          break;
+        case RequestStatus.patientOnboard:
+          socketService!.emitSimulatedEvent('STATUS_UPDATED', {
+            'requestId': updated.requestId,
+            'status': 'PATIENT_ONBOARD',
+          });
+          break;
+        case RequestStatus.enRouteToHospital:
+          socketService!.emitSimulatedEvent('STATUS_UPDATED', {
+            'requestId': updated.requestId,
+            'status': 'EN_ROUTE_TO_HOSPITAL',
+          });
+          break;
+        case RequestStatus.arrivedAtHospital:
+          socketService!.emitSimulatedEvent('STATUS_UPDATED', {
+            'requestId': updated.requestId,
+            'status': 'ARRIVED_AT_HOSPITAL',
+          });
+          break;
+        case RequestStatus.completed:
+          socketService!.emitSimulatedEvent('EMERGENCY_COMPLETED', {
+            'requestId': updated.requestId,
+          });
+          break;
+        case RequestStatus.cancelled:
+          socketService!.emitSimulatedEvent('STATUS_UPDATED', {
+            'requestId': updated.requestId,
+            'status': 'CANCELLED',
+          });
+          break;
+        case RequestStatus.noAmbulanceAvailable:
+          socketService!.emitSimulatedEvent('STATUS_UPDATED', {
+            'requestId': updated.requestId,
+            'status': 'NO_AMBULANCE_AVAILABLE',
+          });
+          break;
+        default:
+          break;
       }
     }
   }

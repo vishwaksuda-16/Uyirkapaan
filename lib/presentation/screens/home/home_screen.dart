@@ -21,6 +21,9 @@ import '../../widgets/map/openfreemap_view.dart';
 import '../../widgets/status_badge.dart';
 import '../../../core/utils/map_route_geometry.dart';
 import '../../../main.dart';
+import '../../controllers/auth_controller.dart';
+import '../../../data/datasources/remote/socket_service.dart';
+import '../../../data/datasources/adaptive/adaptive_datasources.dart';
 
 /// Unified Main Screen for UyirKappan Module 1 (Bystander App).
 /// The MapLibre map IS the main screen background, featuring interactive pinpointing,
@@ -30,6 +33,8 @@ class HomeScreen extends StatefulWidget {
   final LocationController locationController;
   final SimulationController simulationController;
   final TrackingRepository? trackingRepository;
+  final AuthController? authController;
+  final SocketService? socketService;
 
   const HomeScreen({
     super.key,
@@ -37,6 +42,8 @@ class HomeScreen extends StatefulWidget {
     required this.locationController,
     required this.simulationController,
     this.trackingRepository,
+    this.authController,
+    this.socketService,
   });
 
   @override
@@ -50,8 +57,10 @@ class _HomeScreenState extends State<HomeScreen> {
   String? _lastSubscribedRequestId;
   bool _showHospitals = true;
   bool _showAmbulances = true;
-  bool _isAdjustingLocation = false;
+  bool _isPinLocked = false;
   int _recenterCounter = 0;
+  String? _activeTopBannerMessage;
+  Timer? _topBannerTimer;
 
   @override
   void initState() {
@@ -59,6 +68,8 @@ class _HomeScreenState extends State<HomeScreen> {
     _checkAndSubscribeTracking();
     widget.emergencyController.addListener(_onEmergencyStateChanged);
     widget.locationController.addListener(_onLocationChanged);
+    widget.authController?.addListener(_onAuthStateChanged);
+    useRemoteBackendNotifier.addListener(_onBackendModeChanged);
   }
 
   @override
@@ -69,15 +80,48 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   void dispose() {
+    _topBannerTimer?.cancel();
     widget.emergencyController.removeListener(_onEmergencyStateChanged);
     widget.locationController.removeListener(_onLocationChanged);
+    widget.authController?.removeListener(_onAuthStateChanged);
+    useRemoteBackendNotifier.removeListener(_onBackendModeChanged);
     _trackingSubscription?.cancel();
     super.dispose();
+  }
+
+  void _onAuthStateChanged() {
+    if (mounted) setState(() {});
+  }
+
+  void _onBackendModeChanged() {
+    if (mounted) setState(() {});
+  }
+
+  void _showTopBannerNotification(String message) {
+    _topBannerTimer?.cancel();
+    if (mounted) {
+      setState(() {
+        _activeTopBannerMessage = message;
+      });
+    }
+    _topBannerTimer = Timer(const Duration(seconds: 4), () {
+      if (mounted) {
+        setState(() {
+          _activeTopBannerMessage = null;
+        });
+      }
+    });
   }
 
   void _onEmergencyStateChanged() {
     _checkAndSubscribeTracking();
     if (mounted) setState(() {});
+
+    final notif = widget.emergencyController.latestNotification;
+    if (notif != null && notif.isNotEmpty) {
+      _showTopBannerNotification(notif);
+      widget.emergencyController.clearNotification();
+    }
   }
 
   void _onLocationChanged() {
@@ -90,13 +134,6 @@ class _HomeScreenState extends State<HomeScreen> {
       if (_lastSubscribedRequestId != activeRequest.requestId) {
         _lastSubscribedRequestId = activeRequest.requestId;
         _trackingSubscription?.cancel();
-
-        widget.trackingRepository!.getTrackingInfo(activeRequest.requestId).then((info) {
-          if (mounted && info != null) {
-            setState(() => _currentTelemetry = info);
-          }
-        });
-
         _trackingSubscription = widget.trackingRepository!
             .watchTrackingUpdates(activeRequest.requestId)
             .listen((telemetry) {
@@ -114,7 +151,27 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  void _togglePinLock() {
+    OpenFreeMapView.suppressClicks();
+    setState(() {
+      _isPinLocked = !_isPinLocked;
+    });
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        duration: const Duration(seconds: 2),
+        content: Text(
+          _isPinLocked
+              ? '🔒 Incident pickup location locked.'
+              : '🔓 Location unlocked. Tap anywhere on map or drag pin to position pickup spot.',
+          style: const TextStyle(fontWeight: FontWeight.w700),
+        ),
+      ),
+    );
+  }
+
   void _dispatchAmbulance() async {
+    OpenFreeMapView.suppressClicks();
     final loc = widget.locationController.emergencyLocation ??
         LocationData(
           latitude: MapConstants.defaultLatitude,
@@ -151,6 +208,688 @@ class _HomeScreenState extends State<HomeScreen> {
             },
             style: FilledButton.styleFrom(backgroundColor: AppColors.emergencyRed),
             child: const Text('CANCEL EMERGENCY'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBackendModePill({required bool isDesktop}) {
+    return ValueListenableBuilder<bool>(
+      valueListenable: useRemoteBackendNotifier,
+      builder: (context, isRemote, _) {
+        final color = isRemote ? const Color(0xFF16A34A) : Colors.amber.shade800;
+        final label = isRemote ? 'LIVE BACKEND' : 'SIMULATION';
+        return Tooltip(
+          message: isRemote
+              ? 'Connected to Node.js Backend (http://localhost:4000). Click to toggle Simulation.'
+              : 'Running in Demonstration Simulation Mode. Click to toggle Live Backend.',
+          child: InkWell(
+            onTap: () {
+              useRemoteBackendNotifier.value = !isRemote;
+              ScaffoldMessenger.of(context).hideCurrentSnackBar();
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(
+                    !isRemote
+                        ? '⚡ Switched to Live Backend Mode (http://localhost:4000)'
+                        : '🧪 Switched to Local Simulation Mode',
+                    style: const TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  duration: const Duration(seconds: 3),
+                  behavior: SnackBarBehavior.floating,
+                ),
+              );
+            },
+            borderRadius: BorderRadius.circular(20),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: color, width: 1.2),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 7,
+                    height: 7,
+                    decoration: BoxDecoration(
+                      color: color,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                  const SizedBox(width: 5),
+                  Text(
+                    label,
+                    style: TextStyle(
+                      color: color,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: 0.4,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildAuthUserPill({required bool isDesktop}) {
+    final auth = widget.authController;
+    final isAuth = auth?.isAuthenticated ?? false;
+    final name = isAuth ? (auth?.displayName ?? 'Bystander') : 'LOGIN / REGISTER';
+    final role = auth?.role ?? 'BYSTANDER';
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    return Tooltip(
+      message: isAuth
+          ? 'Logged in as $name ($role). Click for details & authentication.'
+          : 'Click to open User Authentication & Management Screen (/auth)',
+      child: InkWell(
+        onTap: () {
+          if (!isAuth) {
+            Navigator.pushNamed(context, RoutePaths.auth).then((_) => setState(() {}));
+          } else {
+            _showUserProfileModal(context);
+          }
+        },
+        borderRadius: BorderRadius.circular(20),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+          decoration: BoxDecoration(
+            color: isAuth
+                ? (isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9))
+                : (isDark ? AppColors.emergencyRed.withValues(alpha: 0.25) : const Color(0xFFFEE2E2)),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(
+              color: isAuth
+                  ? (isDark ? Colors.white24 : Colors.black12)
+                  : AppColors.emergencyRed,
+              width: 1.2,
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                isAuth ? Icons.account_circle_rounded : Icons.login_rounded,
+                size: 16,
+                color: AppColors.emergencyRed,
+              ),
+              const SizedBox(width: 6),
+              ConstrainedBox(
+                constraints: BoxConstraints(maxWidth: isDesktop ? 160 : 120),
+                child: Text(
+                  name,
+                  style: TextStyle(
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w900,
+                    color: isAuth ? null : AppColors.emergencyRed,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              if (isAuth) ...[
+                const SizedBox(width: 4),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+                  decoration: BoxDecoration(
+                    color: Colors.blue.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Text(
+                    role,
+                    style: const TextStyle(fontSize: 9, fontWeight: FontWeight.w900, color: Colors.blue),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildHistoryButton({required bool isDesktop}) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return Tooltip(
+      message: 'View Past Emergency Requests History (Section 13)',
+      child: InkWell(
+        onTap: () => _showRequestHistoryModal(),
+        borderRadius: BorderRadius.circular(20),
+        child: Container(
+          padding: EdgeInsets.symmetric(horizontal: isDesktop ? 12 : 8, vertical: 7),
+          decoration: BoxDecoration(
+            color: isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(
+              color: isDark ? Colors.white24 : Colors.black12,
+              width: 1.1,
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.history_rounded, size: 16, color: AppColors.info),
+              if (isDesktop) ...[
+                const SizedBox(width: 5),
+                const Text(
+                  'HISTORY',
+                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: AppColors.info),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showUserProfileModal(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final emailController = TextEditingController(text: 'bystander@uyirkappan.demo');
+    final passController = TextEditingController(text: 'password123');
+    bool obscurePassword = true;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        final auth = widget.authController;
+        final user = auth?.currentUser;
+
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            return Material(
+              color: isDark ? const Color(0xFF0F172A) : Colors.white,
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+              clipBehavior: Clip.antiAlias,
+              child: Container(
+                padding: const EdgeInsets.all(24),
+                child: SingleChildScrollView(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 500),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.all(10),
+                                decoration: BoxDecoration(
+                                  color: AppColors.emergencyRed.withValues(alpha: 0.15),
+                                  shape: BoxShape.circle,
+                                ),
+                                child: const Icon(Icons.person_rounded, color: AppColors.emergencyRed, size: 24),
+                              ),
+                              const SizedBox(width: 12),
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    auth?.displayName ?? 'Bystander User',
+                                    style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w900),
+                                  ),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: Colors.blue.withValues(alpha: 0.15),
+                                      borderRadius: BorderRadius.circular(6),
+                                    ),
+                                    child: Text(
+                                      'ROLE: ${auth?.role ?? "BYSTANDER"}',
+                                      style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: Colors.blue),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.close_rounded),
+                            onPressed: () => Navigator.pop(ctx),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      const Divider(),
+                      const SizedBox(height: 10),
+                      // Details
+                      _buildProfileInfoRow(Icons.email_outlined, 'Email', user?.email ?? 'bystander@uyirkappan.demo'),
+                      const SizedBox(height: 8),
+                      _buildProfileInfoRow(Icons.phone_outlined, 'Phone', user?.phone ?? '+91 98401 23456'),
+                      const SizedBox(height: 8),
+                      _buildProfileInfoRow(
+                        Icons.key_rounded,
+                        'JWT Token',
+                        auth?.token != null ? 'Bearer ${auth!.token!.substring(0, 18)}... (Active)' : 'Not Set',
+                      ),
+                      const SizedBox(height: 18),
+                      // 1-Tap Demo Credentials Login
+                      SizedBox(
+                        width: double.infinity,
+                        child: FilledButton.icon(
+                          onPressed: () async {
+                            final success = await auth?.loginDemo() ?? false;
+                            setModalState(() {});
+                            if (ctx.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text(success ? '✅ Verified login as bystander@uyirkappan.demo' : 'Login failed'),
+                                  backgroundColor: success ? const Color(0xFF16A34A) : AppColors.emergencyRed,
+                                ),
+                              );
+                            }
+                          },
+                          icon: const Icon(Icons.verified_user_rounded, size: 18),
+                          label: const Text('1-TAP LOGIN AS DEMO BYSTANDER'),
+                          style: FilledButton.styleFrom(
+                            backgroundColor: const Color(0xFF16A34A),
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      // Custom Credentials
+                      Material(
+                        color: Colors.transparent,
+                        child: ExpansionTile(
+                          title: const Text('Custom Login / Register (API)', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+                        children: [
+                          TextField(
+                            controller: emailController,
+                            decoration: const InputDecoration(labelText: 'Email', hintText: 'bystander@uyirkappan.demo'),
+                          ),
+                          const SizedBox(height: 8),
+                          TextField(
+                            controller: passController,
+                            obscureText: obscurePassword,
+                            decoration: InputDecoration(
+                              labelText: 'Password',
+                              hintText: 'password123',
+                              suffixIcon: IconButton(
+                                icon: Icon(
+                                  obscurePassword ? Icons.visibility_off_outlined : Icons.visibility_outlined,
+                                  size: 18,
+                                ),
+                                onPressed: () {
+                                  setModalState(() {
+                                    obscurePassword = !obscurePassword;
+                                  });
+                                },
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: ElevatedButton(
+                                  onPressed: () async {
+                                    await auth?.login(
+                                      email: emailController.text.trim(),
+                                      password: passController.text,
+                                    );
+                                    setModalState(() {});
+                                  },
+                                  child: const Text('POST /api/auth/login'),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: OutlinedButton(
+                                  onPressed: () async {
+                                    await auth?.register(
+                                      name: 'Demo Bystander',
+                                      phone: '+91 98401 23456',
+                                      email: emailController.text.trim(),
+                                      password: passController.text,
+                                    );
+                                    setModalState(() {});
+                                  },
+                                  child: const Text('POST /api/auth/register'),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                      SizedBox(
+                        width: double.infinity,
+                        child: OutlinedButton.icon(
+                          onPressed: () {
+                            Navigator.pop(ctx);
+                            Navigator.pushNamed(context, RoutePaths.auth).then((_) => setState(() {}));
+                          },
+                          icon: const Icon(Icons.open_in_new_rounded, size: 16),
+                          label: const Text('OPEN FULL AUTH & REGISTER SCREEN (/auth)'),
+                          style: OutlinedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      if (auth?.isAuthenticated == true)
+                        SizedBox(
+                          width: double.infinity,
+                          child: OutlinedButton.icon(
+                            onPressed: () async {
+                              await auth?.logout();
+                              setModalState(() {});
+                              if (ctx.mounted) Navigator.pop(ctx);
+                            },
+                            icon: const Icon(Icons.logout_rounded, size: 18),
+                            label: const Text('LOGOUT'),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: AppColors.emergencyRed,
+                              side: const BorderSide(color: AppColors.emergencyRed),
+                              padding: const EdgeInsets.symmetric(vertical: 14),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          );
+        },
+      );
+      },
+    );
+  }
+
+  Widget _buildProfileInfoRow(IconData icon, String label, String value) {
+    return Row(
+      children: [
+        Icon(icon, size: 16, color: AppColors.textSecondaryLight),
+        const SizedBox(width: 8),
+        Text('$label: ', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+        Expanded(
+          child: Text(
+            value,
+            style: const TextStyle(fontSize: 12),
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+      ],
+    );
+  }
+
+  void _showRequestHistoryModal() async {
+    final requests = await widget.emergencyController.getPastRequests();
+    if (!mounted) return;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        return Material(
+          color: isDark ? const Color(0xFF0F172A) : Colors.white,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+          clipBehavior: Clip.antiAlias,
+          child: Container(
+            height: MediaQuery.of(ctx).size.height * 0.75,
+            padding: const EdgeInsets.all(24),
+            child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Row(
+                    children: [
+                      Icon(Icons.history_rounded, color: AppColors.emergencyRed, size: 24),
+                      SizedBox(width: 8),
+                      Text(
+                        'Past Emergency Requests',
+                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
+                      ),
+                    ],
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close_rounded),
+                    onPressed: () => Navigator.pop(ctx),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'Persistent log of emergency requests (Verification Section 13)',
+                style: TextStyle(fontSize: 12, color: isDark ? Colors.white60 : Colors.black54),
+              ),
+              const SizedBox(height: 14),
+              const Divider(),
+              Expanded(
+                child: requests.isEmpty
+                    ? Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.assignment_outlined, size: 48, color: isDark ? Colors.white24 : Colors.black26),
+                            const SizedBox(height: 12),
+                            const Text('No past emergency requests recorded yet'),
+                          ],
+                        ),
+                      )
+                    : ListView.separated(
+                        itemCount: requests.length,
+                        separatorBuilder: (_, __) => const SizedBox(height: 10),
+                        itemBuilder: (context, index) {
+                          final r = requests[index];
+                          return InkWell(
+                            onTap: () => _showRequestDetailDialog(context, r),
+                            borderRadius: BorderRadius.circular(14),
+                            child: Container(
+                              padding: const EdgeInsets.all(14),
+                              decoration: BoxDecoration(
+                                color: isDark ? const Color(0xFF1E293B) : const Color(0xFFF8FAFC),
+                                borderRadius: BorderRadius.circular(14),
+                                border: Border.all(color: isDark ? Colors.white12 : Colors.black12),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      Text(
+                                        r.requestId,
+                                        style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 14),
+                                      ),
+                                      StatusBadge(status: r.status),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 6),
+                                  Row(
+                                    children: [
+                                      Icon(r.emergencyType.icon, size: 15, color: AppColors.emergencyRed),
+                                      const SizedBox(width: 5),
+                                      Text(
+                                        r.emergencyType.displayName,
+                                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+                                      ),
+                                      const SizedBox(width: 10),
+                                      Text('• Victims: ${r.victimCount}', style: const TextStyle(fontSize: 11)),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    'Created: ${r.createdAt.toLocal().toString().substring(0, 19)}',
+                                    style: TextStyle(fontSize: 10.5, color: isDark ? Colors.white54 : Colors.black45),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+              ),
+            ],
+          ),
+        ),
+      );
+    },
+    );
+  }
+
+  void _showRequestDetailDialog(BuildContext context, EmergencyRequest r) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: isDark ? const Color(0xFF0F172A) : Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text('Emergency Details: ${r.requestId}', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _buildDetailItem('requestId', r.requestId),
+            _buildDetailItem('emergencyType', r.emergencyType.code),
+            _buildDetailItem('victimCount', '${r.victimCount}'),
+            _buildDetailItem('pickupLocation', '${r.emergencyLocation.latitude.toStringAsFixed(4)}, ${r.emergencyLocation.longitude.toStringAsFixed(4)}'),
+            _buildDetailItem('destinationHospitalId', r.hospitalDestination ?? 'N/A'),
+            _buildDetailItem('assignedAmbulanceId', r.assignedAmbulanceId ?? 'N/A'),
+            _buildDetailItem('status', '${r.status.code} ("${r.status.userMessage}")'),
+            _buildDetailItem('currentETA', r.currentETA != null ? '${r.currentETA} min' : 'N/A'),
+            _buildDetailItem('attempts', '${r.attempts}'),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('CLOSE')),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDetailItem(String key, String val) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(width: 150, child: Text('$key:', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 11.5))),
+          Expanded(child: Text(val, style: const TextStyle(fontSize: 11.5))),
+        ],
+      ),
+    );
+  }
+
+  void _showVoiceAssistanceModal() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final loc = widget.locationController.currentLocation;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: isDark ? const Color(0xFF0F172A) : Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        title: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: AppColors.emergencyRed.withValues(alpha: 0.15),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.phone_in_talk_rounded, color: AppColors.emergencyRed, size: 22),
+            ),
+            const SizedBox(width: 10),
+            const Expanded(
+              child: Text(
+                '108 Voice Emergency Helpline',
+                style: TextStyle(fontSize: 16.5, fontWeight: FontWeight.w900),
+              ),
+            ),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Direct Toll-Free Voice Assistance & Automated Triage (Section 14)',
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.textSecondaryLight),
+            ),
+            const SizedBox(height: 14),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: isDark ? const Color(0xFF1E293B) : const Color(0xFFEFF6FF),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: Colors.blue.withValues(alpha: 0.3)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Row(
+                    children: [
+                      Icon(Icons.mic_rounded, color: Colors.blue, size: 16),
+                      SizedBox(width: 6),
+                      Text('Simulated Voice IVR Connected', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 12, color: Colors.blue)),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'GPS Location Confirmed: ${loc.latitude.toStringAsFixed(4)}, ${loc.longitude.toStringAsFixed(4)} (Accuracy: ${loc.accuracy?.toStringAsFixed(0) ?? "15"}m)',
+                    style: const TextStyle(fontSize: 11),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 14),
+            const Text(
+              'Tapping "Dispatch Voice Emergency" initiates immediate ambulance allocation and follows the exact backend workflow.',
+              style: TextStyle(fontSize: 11.5),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('CANCEL'),
+          ),
+          FilledButton.icon(
+            onPressed: () async {
+              Navigator.pop(ctx);
+              await widget.emergencyController.submitEmergencyRequest(
+                emergencyLocation: loc,
+                requesterId: widget.authController?.currentUser?.id,
+              );
+              if (!mounted) return;
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('📞 108 Voice Emergency Request Dispatched! Searching for ambulance...'),
+                  backgroundColor: AppColors.emergencyRed,
+                ),
+              );
+            },
+            icon: const Icon(Icons.send_rounded, size: 16),
+            label: const Text('DISPATCH VOICE EMERGENCY'),
+            style: FilledButton.styleFrom(
+              backgroundColor: AppColors.emergencyRed,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
           ),
         ],
       ),
@@ -362,77 +1101,22 @@ class _HomeScreenState extends State<HomeScreen> {
               ambulanceId: ambulanceId,
               routeWaypoints: activeRouteWaypoints,
               style: _selectedMapStyle,
-              isPickerMode: _isAdjustingLocation && !hasActiveRequest,
+              isPickerMode: !_isPinLocked && !hasActiveRequest,
               showSearchRadar: activeRequest != null && activeRequest.status == RequestStatus.searching,
               recenterTrigger: _recenterCounter,
               nearbyHospitals: visibleHospitals,
               nearbyAmbulances: visibleAmbulances,
               onLocationPicked: (newLoc) {
-                if (_isAdjustingLocation && !hasActiveRequest) {
+                if (!_isPinLocked && !hasActiveRequest) {
                   widget.locationController.setManualEmergencyLocation(
                     latitude: newLoc.latitude,
                     longitude: newLoc.longitude,
-                    address: 'Pickup Pin (${newLoc.latitude.toStringAsFixed(4)}, ${newLoc.longitude.toStringAsFixed(4)})',
+                    address: 'Pickup Pin (${newLoc.latitude.toStringAsFixed(4)}° N, ${newLoc.longitude.toStringAsFixed(4)}° E)',
                   );
                 }
               },
             ),
           ),
-
-          // 1B. PINPOINT ADJUSTMENT ACTIVE BANNER
-          if (_isAdjustingLocation && !hasActiveRequest)
-            Positioned(
-              top: isDesktop ? 76 : 155,
-              left: 14,
-              right: 14,
-              child: Center(
-                child: ConstrainedBox(
-                  constraints: BoxConstraints(maxWidth: isDesktop ? 760 : 540),
-                  child: Container(
-                    padding: EdgeInsets.symmetric(horizontal: isDesktop ? 20 : 16, vertical: isDesktop ? 12 : 10),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF0F172A).withValues(alpha: 0.96),
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(color: AppColors.emergencyRed, width: 1.5),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.35),
-                          blurRadius: 18,
-                          offset: const Offset(0, 5),
-                        ),
-                      ],
-                    ),
-                    child: Row(
-                      children: [
-                        Icon(Icons.touch_app_rounded, color: Colors.amber, size: isDesktop ? 28 : 24),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Text(
-                            'Tap map or drag pin to fine-tune pickup spot',
-                            style: TextStyle(color: Colors.white, fontSize: isDesktop ? 13.5 : 12, fontWeight: FontWeight.w700),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        FilledButton(
-                          onPressed: () {
-                            setState(() => _isAdjustingLocation = false);
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text('🔒 Incident location locked.')),
-                            );
-                          },
-                          style: FilledButton.styleFrom(
-                            backgroundColor: AppColors.emergencyRed,
-                            padding: EdgeInsets.symmetric(horizontal: isDesktop ? 18 : 14, vertical: isDesktop ? 10 : 8),
-                            minimumSize: Size(isDesktop ? 88 : 76, isDesktop ? 42 : 38),
-                          ),
-                          child: Text('LOCK PIN', style: TextStyle(fontSize: isDesktop ? 13 : 12, fontWeight: FontWeight.w900)),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ),
 
           // 2. TOP FLOATING APP BAR (Widescreen Single-Row Navbar on Desktop)
           Positioned(
@@ -470,6 +1154,81 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ),
 
+          // 2.5 TOP FLOATING IN-APP ALERT BANNER (Non-intrusive, zero overlap with bottom dock)
+          if (_activeTopBannerMessage != null)
+            Positioned(
+              top: isDesktop ? 80 : 70,
+              left: 0,
+              right: 0,
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 580),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Material(
+                      elevation: 10,
+                      borderRadius: BorderRadius.circular(16),
+                      color: const Color(0xFF0F172A),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(
+                            color: _activeTopBannerMessage!.contains('cancelled') ||
+                                    _activeTopBannerMessage!.contains('error')
+                                ? AppColors.emergencyRed
+                                : (_activeTopBannerMessage!.contains('Finding another')
+                                    ? const Color(0xFFD97706)
+                                    : const Color(0xFF38BDF8)),
+                            width: 1.5,
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(
+                              _activeTopBannerMessage!.contains('cancelled')
+                                  ? Icons.cancel_outlined
+                                  : (_activeTopBannerMessage!.contains('Finding another')
+                                      ? Icons.sync_problem_rounded
+                                      : Icons.notifications_active_rounded),
+                              color: _activeTopBannerMessage!.contains('cancelled')
+                                  ? AppColors.emergencyRed
+                                  : (_activeTopBannerMessage!.contains('Finding another')
+                                      ? const Color(0xFFD97706)
+                                      : const Color(0xFF38BDF8)),
+                              size: 20,
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                _activeTopBannerMessage!,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w800,
+                                  fontSize: 13,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            InkWell(
+                              onTap: () {
+                                setState(() => _activeTopBannerMessage = null);
+                              },
+                              borderRadius: BorderRadius.circular(12),
+                              child: const Padding(
+                                padding: EdgeInsets.all(4),
+                                child: Icon(Icons.close_rounded, color: Colors.white70, size: 18),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+
           // 3. RIGHT FLOATING ACTIONS (GPS Re-center & Emergency Call)
           Positioned(
             right: isDesktop ? 24 : 16,
@@ -483,9 +1242,10 @@ class _HomeScreenState extends State<HomeScreen> {
                   child: FloatingActionButton(
                     heroTag: 'home_recenter_gps',
                     onPressed: () async {
+                      OpenFreeMapView.suppressClicks();
                       await widget.locationController.snapToCurrentGps();
                       setState(() {
-                        _isAdjustingLocation = false;
+                        _isPinLocked = false;
                         _recenterCounter++;
                       });
                       if (context.mounted) {
@@ -716,10 +1476,25 @@ class _HomeScreenState extends State<HomeScreen> {
 
           const SizedBox(width: 12),
 
+          // Backend Mode (Live REST/Socket.IO vs Simulation)
+          _buildBackendModePill(isDesktop: true),
+
+          const SizedBox(width: 8),
+
+          // History Log (Section 13)
+          _buildHistoryButton(isDesktop: true),
+
+          const SizedBox(width: 8),
+
+          // Authenticated Bystander Profile (Section 1)
+          _buildAuthUserPill(isDesktop: true),
+
+          const SizedBox(width: 8),
+
           // Night / Dark Mode Toggle
           _buildThemeToggleButton(isDesktop: true),
 
-          const SizedBox(width: 10),
+          const SizedBox(width: 8),
 
           // DEMO Quick Pill
           InkWell(
@@ -793,82 +1568,101 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ],
           ),
-          child: Row(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              Container(
-                padding: const EdgeInsets.all(7),
-                decoration: BoxDecoration(
-                  color: AppColors.emergencyRed,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: const Icon(
-                  Icons.health_and_safety_rounded,
-                  color: Colors.white,
-                  size: 20,
-                ),
-              ),
-              const SizedBox(width: 10),
-              const Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
+              Row(
                 children: [
-                  Text(
-                    AppConstants.appName,
-                    style: TextStyle(
-                      fontSize: 17,
-                      fontWeight: FontWeight.w900,
-                      letterSpacing: -0.5,
+                  Container(
+                    padding: const EdgeInsets.all(7),
+                    decoration: BoxDecoration(
                       color: AppColors.emergencyRed,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(
+                      Icons.health_and_safety_rounded,
+                      color: Colors.white,
+                      size: 20,
                     ),
                   ),
-                  Text(
-                    'Emergency Response System',
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                      color: AppColors.textSecondaryLight,
-                    ),
-                  ),
-                ],
-              ),
-              const Spacer(),
-              _buildThemeToggleButton(isDesktop: false),
-              const SizedBox(width: 8),
-              InkWell(
-                onTap: () {
-                  Navigator.pushNamed(context, RoutePaths.simulationScenarios);
-                },
-                borderRadius: BorderRadius.circular(20),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-                  decoration: BoxDecoration(
-                    color: Colors.amber.shade900.withValues(alpha: 0.15),
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(color: Colors.amber.shade700, width: 1.2),
-                  ),
-                  child: Row(
+                  const SizedBox(width: 10),
+                  const Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Container(
-                        width: 7,
-                        height: 7,
-                        decoration: BoxDecoration(
-                          color: Colors.amber.shade600,
-                          shape: BoxShape.circle,
+                      Text(
+                        AppConstants.appName,
+                        style: TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: -0.5,
+                          color: AppColors.emergencyRed,
                         ),
                       ),
-                      const SizedBox(width: 5),
                       Text(
-                        'DEMO',
+                        'Emergency Response System',
                         style: TextStyle(
-                          color: Colors.amber.shade900,
                           fontSize: 11,
-                          fontWeight: FontWeight.w900,
-                          letterSpacing: 0.5,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.textSecondaryLight,
                         ),
                       ),
                     ],
                   ),
+                  const Spacer(),
+                  _buildThemeToggleButton(isDesktop: false),
+                  const SizedBox(width: 6),
+                  InkWell(
+                    onTap: () {
+                      Navigator.pushNamed(context, RoutePaths.simulationScenarios);
+                    },
+                    borderRadius: BorderRadius.circular(20),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: Colors.amber.shade900.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(color: Colors.amber.shade700, width: 1.2),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Container(
+                            width: 7,
+                            height: 7,
+                            decoration: BoxDecoration(
+                              color: Colors.amber.shade600,
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                          const SizedBox(width: 5),
+                          Text(
+                            'DEMO',
+                            style: TextStyle(
+                              color: Colors.amber.shade900,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w900,
+                              letterSpacing: 0.5,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _buildBackendModePill(isDesktop: false),
+                    const SizedBox(width: 6),
+                    _buildHistoryButton(isDesktop: false),
+                    const SizedBox(width: 6),
+                    _buildAuthUserPill(isDesktop: false),
+                  ],
                 ),
               ),
             ],
@@ -1018,9 +1812,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     const SizedBox(width: 8),
                     InkWell(
                       onTap: () {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Direct Emergency Helpline: 108 / 112')),
-                        );
+                        _showVoiceAssistanceModal();
                       },
                       borderRadius: BorderRadius.circular(12),
                       child: Container(
@@ -1057,8 +1849,8 @@ class _HomeScreenState extends State<HomeScreen> {
                     color: isDark ? const Color(0xFF0F172A) : const Color(0xFFEFF6FF),
                     borderRadius: BorderRadius.circular(14),
                     border: Border.all(
-                      color: _isAdjustingLocation ? AppColors.emergencyRed : const Color(0xFF3B82F6).withValues(alpha: 0.35),
-                      width: _isAdjustingLocation ? 1.8 : 1.2,
+                      color: _isPinLocked ? (isDark ? Colors.white24 : const Color(0xFF94A3B8)) : const Color(0xFF3B82F6).withValues(alpha: 0.6),
+                      width: 1.5,
                     ),
                   ),
                   child: Row(
@@ -1066,12 +1858,14 @@ class _HomeScreenState extends State<HomeScreen> {
                       Container(
                         padding: const EdgeInsets.all(7),
                         decoration: BoxDecoration(
-                          color: AppColors.emergencyRed.withValues(alpha: 0.12),
+                          color: (_isPinLocked ? Colors.blueGrey : AppColors.emergencyRed).withValues(alpha: 0.12),
                           shape: BoxShape.circle,
                         ),
                         child: Icon(
-                          _isAdjustingLocation ? Icons.edit_location_alt_rounded : Icons.location_on_rounded,
-                          color: AppColors.emergencyRed,
+                          _isPinLocked
+                              ? Icons.lock_rounded
+                              : (loc?.isManualOverride == true ? Icons.edit_location_alt_rounded : Icons.location_on_rounded),
+                          color: _isPinLocked ? (isDark ? Colors.white70 : const Color(0xFF475569)) : AppColors.emergencyRed,
                           size: 20,
                         ),
                       ),
@@ -1087,20 +1881,26 @@ class _HomeScreenState extends State<HomeScreen> {
                                   width: 7,
                                   height: 7,
                                   decoration: BoxDecoration(
-                                    color: _isAdjustingLocation ? Colors.amber : const Color(0xFF10B981),
+                                    color: _isPinLocked
+                                        ? const Color(0xFF64748B)
+                                        : (loc?.isManualOverride == true ? Colors.amber : const Color(0xFF10B981)),
                                     shape: BoxShape.circle,
                                   ),
                                 ),
                                 const SizedBox(width: 5),
                                 Text(
-                                  _isAdjustingLocation ? 'ADJUSTING PIN' : 'LOCATION LOCKED',
+                                  _isPinLocked
+                                      ? 'LOCATION LOCKED'
+                                      : (loc?.isManualOverride == true ? 'MANUAL PINPOINT' : 'GPS POSITION (DETECTED)'),
                                   style: TextStyle(
                                     fontSize: 10,
                                     fontWeight: FontWeight.w900,
                                     letterSpacing: 0.5,
-                                    color: _isAdjustingLocation
-                                        ? Colors.amber.shade700
-                                        : (isDark ? Colors.blue.shade300 : const Color(0xFF1D4ED8)),
+                                    color: _isPinLocked
+                                        ? (isDark ? Colors.blueGrey.shade200 : const Color(0xFF475569))
+                                        : (loc?.isManualOverride == true
+                                            ? Colors.amber.shade700
+                                            : (isDark ? Colors.blue.shade300 : const Color(0xFF1D4ED8))),
                                   ),
                                 ),
                               ],
@@ -1123,28 +1923,28 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                       const SizedBox(width: 8),
                       FilledButton.tonal(
-                        onPressed: () {
-                          setState(() => _isAdjustingLocation = !_isAdjustingLocation);
-                          if (!_isAdjustingLocation) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text('🔒 Incident location locked.')),
-                            );
-                          }
-                        },
+                        onPressed: _togglePinLock,
                         style: FilledButton.styleFrom(
-                          backgroundColor: _isAdjustingLocation
-                              ? AppColors.emergencyRed
-                              : (isDark ? Colors.white.withValues(alpha: 0.12) : const Color(0xFFDBEAFE)),
-                          foregroundColor: _isAdjustingLocation
-                              ? Colors.white
+                          backgroundColor: _isPinLocked
+                              ? (isDark ? Colors.white.withValues(alpha: 0.12) : const Color(0xFFE2E8F0))
+                              : (isDark ? Colors.white.withValues(alpha: 0.15) : const Color(0xFFDBEAFE)),
+                          foregroundColor: _isPinLocked
+                              ? (isDark ? Colors.white70 : const Color(0xFF334155))
                               : (isDark ? Colors.white : const Color(0xFF1E40AF)),
                           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                          minimumSize: const Size(78, 34),
+                          minimumSize: const Size(82, 34),
                         ),
-                        child: Text(
-                          _isAdjustingLocation ? 'LOCK PIN' : 'ADJUST PIN',
-                          style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.w900),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(_isPinLocked ? Icons.lock_open_rounded : Icons.lock_rounded, size: 14),
+                            const SizedBox(width: 4),
+                            Text(
+                              _isPinLocked ? 'UNLOCK' : 'LOCK PIN',
+                              style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.w900),
+                            ),
+                          ],
                         ),
                       ),
                     ],
@@ -1299,19 +2099,19 @@ class _HomeScreenState extends State<HomeScreen> {
   ) {
     final status = request.status;
     final isFallbackActive = request.fallbackCount > 0 && status == RequestStatus.searching;
-    final etaFormatted = _currentTelemetry?.eta?.formattedEta ?? '6 min';
-    final speed = _currentTelemetry?.speedKmH != null ? '${_currentTelemetry!.speedKmH!.toStringAsFixed(0)} km/h' : '48 km/h';
+    final etaMinutes = _currentTelemetry?.eta?.estimatedMinutes ?? request.currentETA ?? 5;
+    final etaFormatted = 'ETA: $etaMinutes minutes';
     final ambulanceId = _currentTelemetry?.ambulanceId ?? request.assignedAmbulanceId ?? 'AMB-CH-042';
 
     return Container(
       key: const ValueKey('desktop_active_tracking_dock'),
-      padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 14),
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
       decoration: BoxDecoration(
         color: isDark ? const Color(0xFF1E293B) : Colors.white,
-        borderRadius: BorderRadius.circular(24),
+        borderRadius: BorderRadius.circular(22),
         border: Border.all(
-          color: isDark ? Colors.white.withValues(alpha: 0.1) : Colors.black.withValues(alpha: 0.08),
-          width: 1,
+          color: isDark ? Colors.white.withValues(alpha: 0.12) : Colors.black.withValues(alpha: 0.08),
+          width: 1.2,
         ),
         boxShadow: [
           BoxShadow(
@@ -1321,14 +2121,15 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ],
       ),
-      child: Row(
-        children: [
-          // Section 1: ETA & Status Badge
-          SizedBox(
-            width: 250,
-            child: Column(
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final isCompact = constraints.maxWidth < 980;
+
+          if (isCompact) {
+            // Adaptive 2-Row Layout for narrower screens: zero overlaps guaranteed
+            return Column(
               mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 Row(
                   children: [
@@ -1341,113 +2142,226 @@ class _HomeScreenState extends State<HomeScreen> {
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          const Icon(Icons.timer_rounded, color: Colors.white, size: 16),
+                          const Icon(Icons.timer_rounded, color: Colors.white, size: 15),
                           const SizedBox(width: 5),
                           Text(
-                            'ETA: ${etaFormatted.toUpperCase()}',
+                            etaFormatted,
                             style: const TextStyle(
                               color: Colors.white,
-                              fontSize: 13,
+                              fontSize: 12,
                               fontWeight: FontWeight.w900,
-                              letterSpacing: 0.6,
+                              letterSpacing: 0.3,
                             ),
                           ),
                         ],
                       ),
                     ),
-                    const SizedBox(width: 8),
-                    StatusBadge(status: status),
+                    const SizedBox(width: 10),
+                    Flexible(child: StatusBadge(status: status)),
+                    if (isFallbackActive) ...[
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: AppColors.statusFallback.withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: AppColors.statusFallback),
+                        ),
+                        child: Text(
+                          'Fallback #${request.fallbackCount}',
+                          style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.w800, color: AppColors.statusFallback),
+                        ),
+                      ),
+                    ],
+                    const Spacer(),
+                    SizedBox(
+                      height: 34,
+                      child: FilledButton(
+                        onPressed: request.status.canCancel ? _showCancelDialog : null,
+                        style: FilledButton.styleFrom(
+                          backgroundColor: request.status.canCancel
+                              ? AppColors.emergencyRed.withValues(alpha: 0.15)
+                              : Colors.grey.withValues(alpha: 0.1),
+                          foregroundColor: request.status.canCancel ? AppColors.emergencyRed : Colors.grey,
+                          elevation: 0,
+                          side: BorderSide(
+                            color: request.status.canCancel ? AppColors.emergencyRed : Colors.grey.withValues(alpha: 0.3),
+                            width: 1.2,
+                          ),
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        ),
+                        child: Text(
+                          request.status.canCancel ? 'CANCEL EMERGENCY' : 'EN ROUTE',
+                          style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 10.5),
+                        ),
+                      ),
+                    ),
                   ],
                 ),
-                if (isFallbackActive) ...[
-                  const SizedBox(height: 6),
-                  const Row(
-                    children: [
-                      Icon(Icons.sync_problem_rounded, color: AppColors.statusFallback, size: 14),
-                      SizedBox(width: 5),
-                      Expanded(
-                        child: Text(
-                          'Cascading fallback: Re-routing to next unit',
-                          style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w700, color: AppColors.statusFallback),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Container(
+                      width: 32,
+                      height: 32,
+                      decoration: BoxDecoration(
+                        color: AppColors.emergencyLightRed,
+                        shape: BoxShape.circle,
+                        border: Border.all(color: AppColors.emergencyRed.withValues(alpha: 0.3)),
+                      ),
+                      child: const Center(
+                        child: Text('🚑', style: TextStyle(fontSize: 16)),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      ambulanceId,
+                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w900),
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      '• Driver: ${request.assignedDriverName ?? "Suresh Kumar"}',
+                      style: const TextStyle(fontSize: 11, color: AppColors.textSecondaryLight, fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF0284C7).withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: const Color(0xFF0284C7).withValues(alpha: 0.3)),
                         ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.local_hospital_rounded, size: 14, color: Color(0xFF0284C7)),
+                            const SizedBox(width: 5),
+                            Flexible(
+                              child: Text(
+                                assignedHospital?.name ?? request.hospitalDestination ?? 'General Hospital',
+                                style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: Color(0xFF0284C7)),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            );
+          }
+
+          // Widescreen Single-Tier Cockpit Dock (Zero Overlap & Proportional Flex)
+          return Row(
+            children: [
+              // ETA Capsule
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                decoration: BoxDecoration(
+                  color: AppColors.emergencyRed,
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.timer_rounded, color: Colors.white, size: 16),
+                    const SizedBox(width: 6),
+                    Text(
+                      etaFormatted,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: 0.3,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+
+              // Status Badge (bounded with Flexible so it never overflows)
+              Flexible(
+                flex: 3,
+                child: StatusBadge(status: status),
+              ),
+
+              if (isFallbackActive) ...[
+                const SizedBox(width: 10),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: AppColors.statusFallback.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: AppColors.statusFallback),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.sync_problem_rounded, color: AppColors.statusFallback, size: 14),
+                      const SizedBox(width: 5),
+                      Text(
+                        'Fallback #${request.fallbackCount}',
+                        style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: AppColors.statusFallback),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+
+              const SizedBox(width: 14),
+              Container(
+                width: 1,
+                height: 36,
+                color: isDark ? Colors.white12 : Colors.black12,
+              ),
+              const SizedBox(width: 14),
+
+              // Ambulance Card
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 36,
+                    height: 36,
+                    decoration: BoxDecoration(
+                      color: AppColors.emergencyLightRed,
+                      shape: BoxShape.circle,
+                      border: Border.all(color: AppColors.emergencyRed.withValues(alpha: 0.3)),
+                    ),
+                    child: const Center(
+                      child: Text('🚑', style: TextStyle(fontSize: 18)),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        ambulanceId,
+                        style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w900),
+                      ),
+                      Text(
+                        'Driver: ${request.assignedDriverName ?? "Suresh Kumar"}',
+                        style: const TextStyle(fontSize: 10.5, color: AppColors.textSecondaryLight, fontWeight: FontWeight.w600),
                       ),
                     ],
                   ),
                 ],
-              ],
-            ),
-          ),
+              ),
 
-          // Vertical Divider
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Container(
-              width: 1,
-              height: 65,
-              color: isDark ? Colors.white12 : Colors.black12,
-            ),
-          ),
+              const SizedBox(width: 14),
 
-          // Section 2: Vehicle & Driver details + Destination Hospital + Live Telemetry
-          Expanded(
-            child: Row(
-              children: [
-                Container(
-                  width: 44,
-                  height: 44,
-                  decoration: BoxDecoration(
-                    color: AppColors.emergencyLightRed,
-                    shape: BoxShape.circle,
-                    border: Border.all(color: AppColors.emergencyRed.withValues(alpha: 0.3), width: 1.5),
-                  ),
-                  child: const Center(
-                    child: Text('🚑', style: TextStyle(fontSize: 22)),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      ambulanceId,
-                      style: const TextStyle(fontSize: 15.5, fontWeight: FontWeight.w900, letterSpacing: 0.3),
-                    ),
-                    Text(
-                      'Driver: ${request.assignedDriverName ?? "Suresh Kumar"} • Unit in Focus',
-                      style: const TextStyle(fontSize: 11.5, color: AppColors.textSecondaryLight, fontWeight: FontWeight.w500),
-                    ),
-                  ],
-                ),
-                const SizedBox(width: 14),
-                InkWell(
-                  onTap: () {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Calling Driver: 108...')),
-                    );
-                  },
-                  borderRadius: BorderRadius.circular(14),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-                    decoration: BoxDecoration(
-                      color: AppColors.success,
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    child: const Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.phone_in_talk_rounded, color: Colors.white, size: 14),
-                        SizedBox(width: 4),
-                        Text('CALL', style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w900)),
-                      ],
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 14),
-                // Destination Hospital Pill
-                Container(
+              // Destination Hospital Pill
+              Flexible(
+                flex: 3,
+                child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                   decoration: BoxDecoration(
                     color: const Color(0xFF0284C7).withValues(alpha: 0.12),
@@ -1458,9 +2372,8 @@ class _HomeScreenState extends State<HomeScreen> {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       const Icon(Icons.local_hospital_rounded, size: 14, color: Color(0xFF0284C7)),
-                      const SizedBox(width: 5),
-                      ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 160),
+                      const SizedBox(width: 6),
+                      Flexible(
                         child: Text(
                           assignedHospital?.name ?? request.hospitalDestination ?? 'General Hospital',
                           style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: Color(0xFF0284C7)),
@@ -1471,43 +2384,38 @@ class _HomeScreenState extends State<HomeScreen> {
                     ],
                   ),
                 ),
-                const Spacer(),
-                _buildTelemetryBadge(Icons.speed_rounded, 'SPEED', speed, AppColors.info),
-                const SizedBox(width: 20),
-                _buildTelemetryBadge(Icons.alt_route_rounded, 'DISTANCE', '2.4 km', AppColors.emergencyRed),
-                const SizedBox(width: 20),
-                _buildTelemetryBadge(Icons.traffic_rounded, 'CORRIDOR', 'ACTIVE', AppColors.success),
-              ],
-            ),
-          ),
-
-          // Vertical Divider
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Container(
-              width: 1,
-              height: 65,
-              color: isDark ? Colors.white12 : Colors.black12,
-            ),
-          ),
-
-          // Section 3: Cancel Emergency Button
-          SizedBox(
-            width: 140,
-            child: FilledButton(
-              onPressed: _showCancelDialog,
-              style: FilledButton.styleFrom(
-                backgroundColor: AppColors.emergencyRed.withValues(alpha: 0.15),
-                foregroundColor: AppColors.emergencyRed,
-                elevation: 0,
-                side: const BorderSide(color: AppColors.emergencyRed, width: 1.5),
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
               ),
-              child: const Text('CANCEL', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 12)),
-            ),
-          ),
-        ],
+
+              const SizedBox(width: 12),
+              const Spacer(),
+
+              // Cancel Emergency Button
+              SizedBox(
+                height: 40,
+                child: FilledButton(
+                  onPressed: request.status.canCancel ? _showCancelDialog : null,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: request.status.canCancel
+                        ? AppColors.emergencyRed.withValues(alpha: 0.15)
+                        : Colors.grey.withValues(alpha: 0.1),
+                    foregroundColor: request.status.canCancel ? AppColors.emergencyRed : Colors.grey,
+                    elevation: 0,
+                    side: BorderSide(
+                      color: request.status.canCancel ? AppColors.emergencyRed : Colors.grey.withValues(alpha: 0.3),
+                      width: 1.5,
+                    ),
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                  child: Text(
+                    request.status.canCancel ? 'CANCEL EMERGENCY' : 'EN ROUTE',
+                    style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 11),
+                  ),
+                ),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
@@ -1523,8 +2431,8 @@ class _HomeScreenState extends State<HomeScreen> {
   ]) {
     final status = request.status;
     final isFallbackActive = request.fallbackCount > 0 && status == RequestStatus.searching;
-    final etaFormatted = _currentTelemetry?.eta?.formattedEta ?? '6 min';
-    final speed = _currentTelemetry?.speedKmH != null ? '${_currentTelemetry!.speedKmH!.toStringAsFixed(0)} km/h' : '48 km/h';
+    final etaMinutes = _currentTelemetry?.eta?.estimatedMinutes ?? request.currentETA ?? 5;
+    final etaFormatted = 'ETA: $etaMinutes minutes';
     final ambulanceId = _currentTelemetry?.ambulanceId ?? request.assignedAmbulanceId ?? 'AMB-CH-042';
 
     return Container(
@@ -1545,7 +2453,7 @@ class _HomeScreenState extends State<HomeScreen> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Cascading Fallback Alert Banner
+          // Cascading Fallback Alert Banner (Section 12)
           if (isFallbackActive) ...[
             Container(
               padding: const EdgeInsets.all(12),
@@ -1555,14 +2463,14 @@ class _HomeScreenState extends State<HomeScreen> {
                 borderRadius: BorderRadius.circular(14),
                 border: Border.all(color: AppColors.statusFallback, width: 1.2),
               ),
-              child: const Row(
+              child: Row(
                 children: [
-                  Icon(Icons.sync_problem_rounded, color: AppColors.statusFallback, size: 20),
-                  SizedBox(width: 10),
+                  const Icon(Icons.sync_problem_rounded, color: AppColors.statusFallback, size: 20),
+                  const SizedBox(width: 10),
                   Expanded(
                     child: Text(
-                      'Re-routing: Driver could not proceed. Cascading fallback dispatching next nearest unit.',
-                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppColors.statusFallback),
+                      'Finding another available ambulance... (Attempt #${request.fallbackCount})',
+                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppColors.statusFallback),
                     ),
                   ),
                 ],
@@ -1588,12 +2496,12 @@ class _HomeScreenState extends State<HomeScreen> {
                         Icon(Icons.timer_rounded, color: Colors.white, size: isDesktop ? 16 : 14),
                         const SizedBox(width: 5),
                         Text(
-                          'ETA: ${etaFormatted.toUpperCase()}',
+                          etaFormatted,
                           style: TextStyle(
                             color: Colors.white,
-                            fontSize: isDesktop ? 13.5 : 12,
+                            fontSize: isDesktop ? 13 : 11.5,
                             fontWeight: FontWeight.w900,
-                            letterSpacing: 0.6,
+                            letterSpacing: 0.4,
                           ),
                         ),
                       ],
@@ -1604,12 +2512,15 @@ class _HomeScreenState extends State<HomeScreen> {
                 ],
               ),
               TextButton(
-                onPressed: _showCancelDialog,
+                onPressed: request.status.canCancel ? _showCancelDialog : null,
                 style: TextButton.styleFrom(
-                  foregroundColor: Colors.redAccent,
+                  foregroundColor: request.status.canCancel ? Colors.redAccent : Colors.grey,
                   visualDensity: VisualDensity.compact,
                 ),
-                child: Text('CANCEL', style: TextStyle(fontWeight: FontWeight.w800, fontSize: isDesktop ? 12 : 11)),
+                child: Text(
+                  request.status.canCancel ? 'CANCEL' : 'EN ROUTE',
+                  style: TextStyle(fontWeight: FontWeight.w800, fontSize: isDesktop ? 12 : 11),
+                ),
               ),
             ],
           ),
@@ -1715,22 +2626,6 @@ class _HomeScreenState extends State<HomeScreen> {
               ],
             ),
           ),
-
-          const SizedBox(height: 12),
-          const Divider(height: 1),
-          const SizedBox(height: 10),
-
-          // Telemetry Row (Live speed, distance, corridor)
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceAround,
-            children: [
-              _buildTelemetryBadge(Icons.speed_rounded, 'SPEED', speed, AppColors.info),
-              Container(width: 1, height: 28, color: Colors.grey.withValues(alpha: 0.2)),
-              _buildTelemetryBadge(Icons.alt_route_rounded, 'DISTANCE', '2.4 km', AppColors.emergencyRed),
-              Container(width: 1, height: 28, color: Colors.grey.withValues(alpha: 0.2)),
-              _buildTelemetryBadge(Icons.traffic_rounded, 'CORRIDOR', 'ACTIVE', AppColors.success),
-            ],
-          ),
         ],
       ),
     );
@@ -1803,17 +2698,23 @@ class _HomeScreenState extends State<HomeScreen> {
                   'All 40 network emergency units are currently deployed on active critical calls.',
                   style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
                 ),
-                const SizedBox(height: 8),
-                FilledButton.tonal(
+                const SizedBox(height: 10),
+                FilledButton.icon(
                   onPressed: () {
                     widget.emergencyController.resetForm();
                   },
-                  style: FilledButton.styleFrom(
-                    backgroundColor: isDark ? Colors.white12 : Colors.grey.shade200,
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                    minimumSize: const Size(120, 32),
+                  icon: const Icon(Icons.refresh_rounded, size: 16, color: Colors.white),
+                  label: const Text(
+                    'DISMISS / RETRY SEARCH',
+                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w900, color: Colors.white, letterSpacing: 0.4),
                   ),
-                  child: const Text('DISMISS / RETRY SEARCH', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800)),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: AppColors.emergencyRed,
+                    foregroundColor: Colors.white,
+                    elevation: 3,
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
                 ),
               ],
             ),
@@ -1995,9 +2896,17 @@ class _HomeScreenState extends State<HomeScreen> {
                   ],
                 ),
               ),
-              TextButton(
+              FilledButton.icon(
                 onPressed: () => widget.emergencyController.resetForm(),
-                child: const Text('DISMISS', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 11.5)),
+                icon: const Icon(Icons.refresh_rounded, size: 14, color: Colors.white),
+                label: const Text('DISMISS / RETRY', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 11, color: Colors.white)),
+                style: FilledButton.styleFrom(
+                  backgroundColor: AppColors.emergencyRed,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  minimumSize: const Size(110, 32),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                ),
               ),
             ],
           ),
@@ -2128,9 +3037,7 @@ class _HomeScreenState extends State<HomeScreen> {
               const SizedBox(width: 8),
               InkWell(
                 onTap: () {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Direct Emergency Helpline: 108 / 112')),
-                  );
+                  _showVoiceAssistanceModal();
                 },
                 borderRadius: BorderRadius.circular(14),
                 child: Container(
@@ -2172,8 +3079,8 @@ class _HomeScreenState extends State<HomeScreen> {
                 color: isDark ? const Color(0xFF0F172A) : const Color(0xFFEFF6FF),
                 borderRadius: BorderRadius.circular(18),
                 border: Border.all(
-                  color: _isAdjustingLocation ? AppColors.emergencyRed : const Color(0xFF3B82F6).withValues(alpha: 0.35),
-                  width: _isAdjustingLocation ? 2.0 : 1.5,
+                  color: _isPinLocked ? (isDark ? Colors.white24 : const Color(0xFF94A3B8)) : const Color(0xFF3B82F6).withValues(alpha: 0.6),
+                  width: 1.5,
                 ),
               ),
               child: Row(
@@ -2181,12 +3088,14 @@ class _HomeScreenState extends State<HomeScreen> {
                   Container(
                     padding: EdgeInsets.all(isDesktop ? 12 : 10),
                     decoration: BoxDecoration(
-                      color: AppColors.emergencyRed.withValues(alpha: 0.12),
+                      color: (_isPinLocked ? Colors.blueGrey : AppColors.emergencyRed).withValues(alpha: 0.12),
                       shape: BoxShape.circle,
                     ),
                     child: Icon(
-                      _isAdjustingLocation ? Icons.edit_location_alt_rounded : Icons.location_on_rounded,
-                      color: AppColors.emergencyRed,
+                      _isPinLocked
+                          ? Icons.lock_rounded
+                          : (loc?.isManualOverride == true ? Icons.edit_location_alt_rounded : Icons.location_on_rounded),
+                      color: _isPinLocked ? (isDark ? Colors.white70 : const Color(0xFF475569)) : AppColors.emergencyRed,
                       size: isDesktop ? 28 : 26,
                     ),
                   ),
@@ -2201,21 +3110,27 @@ class _HomeScreenState extends State<HomeScreen> {
                               width: 8,
                               height: 8,
                               decoration: BoxDecoration(
-                                color: _isAdjustingLocation ? Colors.amber : const Color(0xFF10B981),
+                                color: _isPinLocked
+                                    ? const Color(0xFF64748B)
+                                    : (loc?.isManualOverride == true ? Colors.amber : const Color(0xFF10B981)),
                                 shape: BoxShape.circle,
                               ),
                             ),
                             const SizedBox(width: 6),
                             Flexible(
                               child: Text(
-                                _isAdjustingLocation ? 'ADJUSTING PIN' : 'LOCATION LOCKED',
+                                _isPinLocked
+                                    ? 'LOCATION LOCKED'
+                                    : (loc?.isManualOverride == true ? 'MANUAL PINPOINT' : 'GPS POSITION (DETECTED)'),
                                 style: TextStyle(
                                   fontSize: isDesktop ? 11.5 : 10,
                                   fontWeight: FontWeight.w900,
                                   letterSpacing: 0.6,
-                                  color: _isAdjustingLocation
-                                      ? Colors.amber.shade700
-                                      : (isDark ? Colors.blue.shade300 : const Color(0xFF1D4ED8)),
+                                  color: _isPinLocked
+                                      ? (isDark ? Colors.blueGrey.shade200 : const Color(0xFF475569))
+                                      : (loc?.isManualOverride == true
+                                          ? Colors.amber.shade700
+                                          : (isDark ? Colors.blue.shade300 : const Color(0xFF1D4ED8))),
                                 ),
                                 overflow: TextOverflow.ellipsis,
                               ),
@@ -2237,9 +3152,9 @@ class _HomeScreenState extends State<HomeScreen> {
                         ),
                         const SizedBox(height: 3),
                         Text(
-                          _isAdjustingLocation
-                              ? 'Tap map to position marker or drag pin'
-                              : 'Position locked • Tap [Adjust Pin] to modify',
+                          _isPinLocked
+                              ? 'Position locked • Tap [Unlock] to modify'
+                              : 'Tap map or drag pin to set pickup spot',
                           style: TextStyle(
                             fontSize: isDesktop ? 12 : 11,
                             fontWeight: FontWeight.w600,
@@ -2250,30 +3165,30 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                   ),
                   const SizedBox(width: 8),
-                  // Adjust Pin / Lock Pin Toggle Button
+                  // Lock Pin / Unlock Pin Toggle Button
                   FilledButton.tonal(
-                    onPressed: () {
-                      setState(() => _isAdjustingLocation = !_isAdjustingLocation);
-                      if (!_isAdjustingLocation) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('🔒 Incident location locked.')),
-                        );
-                      }
-                    },
+                    onPressed: _togglePinLock,
                     style: FilledButton.styleFrom(
-                      backgroundColor: _isAdjustingLocation
-                          ? AppColors.emergencyRed
-                          : (isDark ? Colors.white.withValues(alpha: 0.12) : const Color(0xFFDBEAFE)),
-                      foregroundColor: _isAdjustingLocation
-                          ? Colors.white
+                      backgroundColor: _isPinLocked
+                          ? (isDark ? Colors.white.withValues(alpha: 0.12) : const Color(0xFFE2E8F0))
+                          : (isDark ? Colors.white.withValues(alpha: 0.15) : const Color(0xFFDBEAFE)),
+                      foregroundColor: _isPinLocked
+                          ? (isDark ? Colors.white70 : const Color(0xFF334155))
                           : (isDark ? Colors.white : const Color(0xFF1E40AF)),
                       padding: EdgeInsets.symmetric(horizontal: isDesktop ? 14 : 10, vertical: isDesktop ? 10 : 8),
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                       minimumSize: Size(isDesktop ? 96 : 82, isDesktop ? 44 : 40),
                     ),
-                    child: Text(
-                      _isAdjustingLocation ? 'LOCK PIN' : 'ADJUST PIN',
-                      style: TextStyle(fontSize: isDesktop ? 12.5 : 11, fontWeight: FontWeight.w900),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(_isPinLocked ? Icons.lock_open_rounded : Icons.lock_rounded, size: 16),
+                        const SizedBox(width: 5),
+                        Text(
+                          _isPinLocked ? 'UNLOCK' : 'LOCK PIN',
+                          style: TextStyle(fontSize: isDesktop ? 12.5 : 11, fontWeight: FontWeight.w900),
+                        ),
+                      ],
                     ),
                   ),
                 ],
@@ -2429,30 +3344,6 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ),
       ),
-    );
-  }
-
-  Widget _buildTelemetryBadge(IconData icon, String label, String value, Color color) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 12, color: color),
-            const SizedBox(width: 4),
-            Text(
-              label,
-              style: const TextStyle(fontSize: 9, fontWeight: FontWeight.w800, color: AppColors.textSecondaryLight),
-            ),
-          ],
-        ),
-        const SizedBox(height: 2),
-        Text(
-          value,
-          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w900, color: color),
-        ),
-      ],
     );
   }
 }

@@ -80,7 +80,7 @@ void main() {
 
       expect(find.text('Emergency Status'), findsOneWidget);
       expect(find.text('REQUEST ID'), findsOneWidget);
-      expect(find.text('Searching for Ambulance'), findsOneWidget);
+      expect(find.text('Searching for an ambulance...'), findsOneWidget);
       expect(find.text('CANCEL EMERGENCY REQUEST'), findsOneWidget);
 
       emergencyController.dispose();

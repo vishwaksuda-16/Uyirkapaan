@@ -36,6 +36,10 @@ class OpenFreeMapView extends StatelessWidget {
     this.onLocationPicked,
   });
 
+  static void suppressClicks([int ms = 600]) {
+    platform_map.PlatformOpenFreeMapView.suppressClicks(ms);
+  }
+
   @override
   Widget build(BuildContext context) {
     return platform_map.PlatformOpenFreeMapView(
