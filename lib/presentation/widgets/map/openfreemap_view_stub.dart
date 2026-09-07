@@ -1,14 +1,16 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart';
+
 import '../../../core/constants/map_constants.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../domain/entities/location_data.dart';
-
 import '../../../domain/entities/nearby_poi.dart';
 
-/// Non-web & Desktop / Test canvas implementation of OpenFreeMap.
-/// Provides rich vector-styled map rendering, interactive pin placement,
-/// and live telemetry ambulance tracking.
+/// Native Mobile & Desktop implementation of OpenFreeMap powered by flutter_map.
+/// Provides full touch gestures (pan, pinch zoom, fling), live OpenStreetMap & CartoDB tiles,
+/// real-time incident pickup pin positioning, ambulance telemetry, and route polylines.
 class PlatformOpenFreeMapView extends StatefulWidget {
   final LocationData? incidentLocation;
   final LocationData? ambulanceLocation;
@@ -39,7 +41,11 @@ class PlatformOpenFreeMapView extends StatefulWidget {
     this.onLocationPicked,
   });
 
-  static void suppressClicks([int ms = 600]) {}
+  static DateTime? _suppressUntil;
+
+  static void suppressClicks([int ms = 600]) {
+    _suppressUntil = DateTime.now().add(Duration(milliseconds: ms));
+  }
 
   @override
   State<PlatformOpenFreeMapView> createState() => _PlatformOpenFreeMapViewState();
@@ -47,12 +53,13 @@ class PlatformOpenFreeMapView extends StatefulWidget {
 
 class _PlatformOpenFreeMapViewState extends State<PlatformOpenFreeMapView>
     with SingleTickerProviderStateMixin {
+  late final MapController _mapController;
   late AnimationController _pulseController;
-  static const double _viewportDegrees = 0.008;
 
   @override
   void initState() {
     super.initState();
+    _mapController = MapController();
     _pulseController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1800),
@@ -62,63 +69,64 @@ class _PlatformOpenFreeMapViewState extends State<PlatformOpenFreeMapView>
   @override
   void dispose() {
     _pulseController.dispose();
+    _mapController.dispose();
     super.dispose();
   }
 
-  Color _getMapBaseColor(OpenFreeMapStyle style) {
-    switch (style) {
-      case OpenFreeMapStyle.dark:
-        return const Color(0xFF1E293B);
-      case OpenFreeMapStyle.fiord:
-        return const Color(0xFF2C3E50);
-      case OpenFreeMapStyle.positron:
-        return const Color(0xFFF8FAFC);
-      case OpenFreeMapStyle.liberty:
-        return const Color(0xFFEDE9E3);
-      case OpenFreeMapStyle.bright:
-      case OpenFreeMapStyle.threeD:
-        return const Color(0xFFE5E3DF);
+  @override
+  void didUpdateWidget(PlatformOpenFreeMapView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+
+    final isRecenter = oldWidget.recenterTrigger != widget.recenterTrigger;
+    final latChanged = oldWidget.incidentLocation?.latitude != widget.incidentLocation?.latitude ||
+        oldWidget.incidentLocation?.longitude != widget.incidentLocation?.longitude;
+
+    if (isRecenter || (latChanged && widget.isPickerMode)) {
+      final targetLat = widget.incidentLocation?.latitude ?? MapConstants.defaultLatitude;
+      final targetLng = widget.incidentLocation?.longitude ?? MapConstants.defaultLongitude;
+      _mapController.move(
+        LatLng(targetLat, targetLng),
+        widget.isPickerMode ? MapConstants.pickerZoom : MapConstants.trackingZoom,
+      );
     }
   }
 
-  Color _getGridLineColor(OpenFreeMapStyle style) {
+  String _getTileUrl(OpenFreeMapStyle style) {
     switch (style) {
       case OpenFreeMapStyle.dark:
+        return 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png';
       case OpenFreeMapStyle.fiord:
-        return Colors.white.withValues(alpha: 0.08);
+        return 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager_labels_under/{z}/{x}/{y}@2x.png';
       case OpenFreeMapStyle.positron:
-        return Colors.black.withValues(alpha: 0.04);
-      case OpenFreeMapStyle.bright:
+        return 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png';
       case OpenFreeMapStyle.liberty:
+        return 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+      case OpenFreeMapStyle.bright:
       case OpenFreeMapStyle.threeD:
-        return Colors.black.withValues(alpha: 0.06);
+        return 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png';
     }
   }
 
-  Offset _project(double lat, double lng, Size size) {
-    final centerLat = widget.incidentLocation?.latitude ?? MapConstants.defaultLatitude;
-    final centerLng = widget.incidentLocation?.longitude ?? MapConstants.defaultLongitude;
-    final dx = (lng - centerLng) * (size.width / _viewportDegrees);
-    final dy = -(lat - centerLat) * (size.height / _viewportDegrees);
-    return Offset(size.width / 2 + dx, size.height / 2 + dy);
+  List<String> _getSubdomains(OpenFreeMapStyle style) {
+    switch (style) {
+      case OpenFreeMapStyle.liberty:
+        return const [];
+      default:
+        return const ['a', 'b', 'c', 'd'];
+    }
   }
 
-  void _handleTap(TapDownDetails details, Size size) {
+  void _handleTap(TapPosition tapPosition, LatLng point) {
     if (!widget.isPickerMode || widget.onLocationPicked == null) return;
-
-    final centerLat = widget.incidentLocation?.latitude ?? MapConstants.defaultLatitude;
-    final centerLng = widget.incidentLocation?.longitude ?? MapConstants.defaultLongitude;
-
-    final dx = details.localPosition.dx - (size.width / 2);
-    final dy = details.localPosition.dy - (size.height / 2);
-
-    final deltaLng = (dx / size.width) * _viewportDegrees;
-    final deltaLat = -(dy / size.height) * _viewportDegrees;
+    if (PlatformOpenFreeMapView._suppressUntil != null &&
+        DateTime.now().isBefore(PlatformOpenFreeMapView._suppressUntil!)) {
+      return;
+    }
 
     widget.onLocationPicked!(
       LocationData(
-        latitude: centerLat + deltaLat,
-        longitude: centerLng + deltaLng,
+        latitude: point.latitude,
+        longitude: point.longitude,
         timestamp: DateTime.now(),
         isManualOverride: true,
       ),
@@ -127,36 +135,205 @@ class _PlatformOpenFreeMapViewState extends State<PlatformOpenFreeMapView>
 
   @override
   Widget build(BuildContext context) {
-    final baseColor = _getMapBaseColor(widget.style);
-    final gridColor = _getGridLineColor(widget.style);
+    final incidentLat = widget.incidentLocation?.latitude ?? MapConstants.defaultLatitude;
+    final incidentLng = widget.incidentLocation?.longitude ?? MapConstants.defaultLongitude;
+    final initialCenter = LatLng(incidentLat, incidentLng);
+    final initialZoom = widget.isPickerMode ? MapConstants.pickerZoom : MapConstants.trackingZoom;
 
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final size = Size(constraints.maxWidth, constraints.maxHeight);
+    final tileUrl = _getTileUrl(widget.style);
+    final subdomains = _getSubdomains(widget.style);
 
-        return GestureDetector(
-          onTapDown: (details) => _handleTap(details, size),
-          child: Container(
-            width: double.infinity,
-            height: double.infinity,
-            color: baseColor,
-            child: Stack(
-              children: [
-                CustomPaint(
-                  size: size,
-                  painter: _VectorGridPainter(
-                    gridColor: gridColor,
-                    style: widget.style,
-                    routePoints: _projectedRoute(size),
-                    has3d: widget.style.has3d,
+    return Stack(
+      children: [
+        FlutterMap(
+          mapController: _mapController,
+          options: MapOptions(
+            initialCenter: initialCenter,
+            initialZoom: initialZoom,
+            minZoom: 3.0,
+            maxZoom: 19.0,
+            interactionOptions: const InteractionOptions(
+              flags: InteractiveFlag.all,
+            ),
+            onTap: _handleTap,
+          ),
+          children: [
+            // 1. Live Raster Map Tiles (OpenStreetMap / CartoDB)
+            TileLayer(
+              urlTemplate: tileUrl,
+              subdomains: subdomains,
+              userAgentPackageName: 'com.uyirkappan.bystander.uyirkappan_bystander',
+              maxZoom: 19,
+            ),
+
+            // 2. Simulated / Real-time Route Polylines
+            if (widget.routeWaypoints != null && widget.routeWaypoints!.length >= 2) ...[
+              PolylineLayer(
+                polylines: [
+                  // Outer casing glow
+                  Polyline(
+                    points: widget.routeWaypoints!
+                        .map((pt) => LatLng(pt.latitude, pt.longitude))
+                        .toList(),
+                    strokeWidth: 7.5,
+                    color: const Color(0xFF174EA6),
                   ),
-                ),
-                if (widget.showSearchRadar) _buildSearchRadar(size),
-                Center(
+                  // Vibrant route inner line
+                  Polyline(
+                    points: widget.routeWaypoints!
+                        .map((pt) => LatLng(pt.latitude, pt.longitude))
+                        .toList(),
+                    strokeWidth: 5.0,
+                    color: const Color(0xFF4285F4),
+                  ),
+                ],
+              ),
+            ],
+
+            // 3. Search Radar Waves (when looking for nearest responder)
+            if (widget.showSearchRadar)
+              MarkerLayer(
+                markers: [
+                  Marker(
+                    point: initialCenter,
+                    width: 140,
+                    height: 140,
+                    child: AnimatedBuilder(
+                      animation: _pulseController,
+                      builder: (context, child) {
+                        final scale = 0.4 + (_pulseController.value * 0.9);
+                        final opacity = (1.0 - _pulseController.value).clamp(0.0, 1.0);
+                        return Center(
+                          child: Container(
+                            width: 140 * scale,
+                            height: 140 * scale,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: AppColors.statusSearching.withValues(alpha: opacity * 0.8),
+                                width: 2.5,
+                              ),
+                              color: AppColors.statusSearching.withValues(alpha: opacity * 0.12),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+
+            // 4. Nearby Hospital POI Markers
+            if (widget.nearbyHospitals != null && widget.nearbyHospitals!.isNotEmpty)
+              MarkerLayer(
+                markers: widget.nearbyHospitals!.map((h) {
+                  return Marker(
+                    point: LatLng(h.latitude, h.longitude),
+                    width: 32,
+                    height: 32,
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF1976D2),
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.white, width: 2),
+                        boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 4)],
+                      ),
+                      child: const Icon(Icons.local_hospital_rounded, color: Colors.white, size: 16),
+                    ),
+                  );
+                }).toList(),
+              ),
+
+            // 5. Nearby Ambulances (idle/patrolling)
+            if (widget.nearbyAmbulances != null && widget.nearbyAmbulances!.isNotEmpty)
+              MarkerLayer(
+                markers: widget.nearbyAmbulances!.map((amb) {
+                  return Marker(
+                    point: LatLng(amb.latitude, amb.longitude),
+                    width: 30,
+                    height: 30,
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: Colors.amber.shade800,
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.white, width: 2),
+                        boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 4)],
+                      ),
+                      child: const Icon(Icons.emergency_rounded, color: Colors.white, size: 15),
+                    ),
+                  );
+                }).toList(),
+              ),
+
+            // 6. Assigned Ambulance Live Telemetry Marker
+            if (widget.ambulanceLocation != null)
+              MarkerLayer(
+                markers: [
+                  Marker(
+                    point: LatLng(
+                      widget.ambulanceLocation!.latitude,
+                      widget.ambulanceLocation!.longitude,
+                    ),
+                    width: 70,
+                    height: 70,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF1E293B),
+                            borderRadius: BorderRadius.circular(8),
+                            boxShadow: const [BoxShadow(color: Colors.black38, blurRadius: 4)],
+                          ),
+                          child: Text(
+                            widget.ambulanceId ?? 'AMB',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 9,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Transform.rotate(
+                          angle: (widget.heading ?? 0.0) * (math.pi / 180),
+                          child: Container(
+                            padding: const EdgeInsets.all(7),
+                            decoration: BoxDecoration(
+                              color: AppColors.statusEnRoute,
+                              shape: BoxShape.circle,
+                              boxShadow: [
+                                BoxShadow(
+                                  color: AppColors.statusEnRoute.withValues(alpha: 0.6),
+                                  blurRadius: 10,
+                                ),
+                              ],
+                            ),
+                            child: const Icon(
+                              Icons.navigation_rounded,
+                              color: Colors.white,
+                              size: 16,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+
+            // 7. Incident / Pickup Point Marker
+            MarkerLayer(
+              markers: [
+                Marker(
+                  point: initialCenter,
+                  width: 90,
+                  height: 90,
                   child: AnimatedBuilder(
                     animation: _pulseController,
                     builder: (context, child) {
-                      final scale = 1.0 + (_pulseController.value * 0.8);
+                      final scale = 1.0 + (_pulseController.value * 0.7);
                       final opacity = (1.0 - _pulseController.value).clamp(0.0, 1.0);
 
                       return Stack(
@@ -165,8 +342,8 @@ class _PlatformOpenFreeMapViewState extends State<PlatformOpenFreeMapView>
                           Transform.scale(
                             scale: scale,
                             child: Container(
-                              width: 38,
-                              height: 38,
+                              width: 44,
+                              height: 44,
                               decoration: BoxDecoration(
                                 shape: BoxShape.circle,
                                 color: AppColors.emergencyRed.withValues(alpha: opacity * 0.4),
@@ -174,8 +351,8 @@ class _PlatformOpenFreeMapViewState extends State<PlatformOpenFreeMapView>
                             ),
                           ),
                           Container(
-                            width: 16,
-                            height: 16,
+                            width: 18,
+                            height: 18,
                             decoration: BoxDecoration(
                               shape: BoxShape.circle,
                               color: AppColors.emergencyRed,
@@ -189,7 +366,7 @@ class _PlatformOpenFreeMapViewState extends State<PlatformOpenFreeMapView>
                             ),
                           ),
                           Positioned(
-                            top: -28,
+                            top: 4,
                             child: Container(
                               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                               decoration: BoxDecoration(
@@ -212,209 +389,91 @@ class _PlatformOpenFreeMapViewState extends State<PlatformOpenFreeMapView>
                     },
                   ),
                 ),
-                if (widget.ambulanceLocation != null) _buildAmbulanceMarker(size),
-                Positioned(
-                  bottom: 6,
-                  left: 8,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: Colors.black.withValues(alpha: 0.5),
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                    child: Text(
-                      'OpenFreeMap (${widget.style.name}) • MapLibre',
-                      style: const TextStyle(
-                        color: Colors.white70,
-                        fontSize: 9,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
-                ),
               ],
             ),
-          ),
-        );
-      },
-    );
-  }
-
-  List<Offset> _projectedRoute(Size size) {
-    final waypoints = widget.routeWaypoints;
-    if (waypoints == null || waypoints.length < 2) return const [];
-    return waypoints.map((pt) => _project(pt.latitude, pt.longitude, size)).toList();
-  }
-
-  Widget _buildSearchRadar(Size size) {
-    const offsets = [
-      Offset(0, 0),
-      Offset(90, -70),
-      Offset(-110, 40),
-      Offset(60, 95),
-      Offset(-80, -90),
-    ];
-
-    return AnimatedBuilder(
-      animation: _pulseController,
-      builder: (context, child) {
-        return Stack(
-          children: [
-            for (var i = 0; i < offsets.length; i++)
-              Positioned(
-                left: size.width / 2 + offsets[i].dx - 28,
-                top: size.height / 2 + offsets[i].dy - 28,
-                child: Transform.scale(
-                  scale: 0.7 + ((_pulseController.value + i * 0.15) % 1.0) * 1.4,
-                  child: Container(
-                    width: 56,
-                    height: 56,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      border: Border.all(
-                        color: AppColors.statusSearching.withValues(
-                          alpha: (1.0 - ((_pulseController.value + i * 0.15) % 1.0)) * 0.7,
-                        ),
-                        width: 2,
-                      ),
-                      color: AppColors.statusSearching.withValues(alpha: 0.08),
-                    ),
-                  ),
-                ),
-              ),
           ],
-        );
-      },
-    );
-  }
+        ),
 
-  Widget _buildAmbulanceMarker(Size size) {
-    final ambLat = widget.ambulanceLocation!.latitude;
-    final ambLng = widget.ambulanceLocation!.longitude;
-    final projected = _project(ambLat, ambLng, size);
-
-    final clampedX = projected.dx.clamp(40.0, math.max(40.0, size.width - 40.0));
-    final clampedY = projected.dy.clamp(40.0, math.max(40.0, size.height - 40.0));
-    final heading = widget.heading ?? 0.0;
-
-    return Positioned(
-      left: clampedX - 24,
-      top: clampedY - 24,
-      child: Column(
-        children: [
-          Container(
+        // Bottom style / provider attribution badge
+        Positioned(
+          bottom: 8,
+          left: 8,
+          child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
             decoration: BoxDecoration(
-              color: const Color(0xFF1E293B),
-              borderRadius: BorderRadius.circular(8),
-              boxShadow: const [BoxShadow(color: Colors.black38, blurRadius: 4)],
+              color: Colors.black.withValues(alpha: 0.6),
+              borderRadius: BorderRadius.circular(4),
             ),
             child: Text(
-              widget.ambulanceId ?? 'AMB',
-              style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.w900),
+              'OpenFreeMap (${widget.style.name}) • OpenStreetMap',
+              style: const TextStyle(
+                color: Colors.white70,
+                fontSize: 9,
+                fontWeight: FontWeight.w600,
+              ),
             ),
           ),
-          const SizedBox(height: 2),
-          Transform.rotate(
-            angle: heading * (math.pi / 180),
-            child: Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: AppColors.statusEnRoute,
-                shape: BoxShape.circle,
-                boxShadow: [
-                  BoxShadow(
-                    color: AppColors.statusEnRoute.withValues(alpha: 0.5),
-                    blurRadius: 10,
-                  ),
-                ],
+        ),
+
+        // Quick zoom in/out & recenter buttons for mobile touch convenience
+        Positioned(
+          right: 12,
+          bottom: 24,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _buildMapActionButton(
+                icon: Icons.add_rounded,
+                onPressed: () {
+                  final zoom = _mapController.camera.zoom;
+                  _mapController.move(_mapController.camera.center, zoom + 1);
+                },
               ),
-              child: const Icon(
-                Icons.navigation_rounded,
-                color: Colors.white,
-                size: 18,
+              const SizedBox(height: 6),
+              _buildMapActionButton(
+                icon: Icons.remove_rounded,
+                onPressed: () {
+                  final zoom = _mapController.camera.zoom;
+                  _mapController.move(_mapController.camera.center, zoom - 1);
+                },
               ),
-            ),
+              const SizedBox(height: 6),
+              _buildMapActionButton(
+                icon: Icons.my_location_rounded,
+                onPressed: () {
+                  _mapController.move(initialCenter, initialZoom);
+                },
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildMapActionButton({
+    required IconData icon,
+    required VoidCallback onPressed,
+  }) {
+    return Container(
+      width: 38,
+      height: 38,
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.92),
+        shape: BoxShape.circle,
+        boxShadow: const [
+          BoxShadow(
+            color: Colors.black26,
+            blurRadius: 4,
+            offset: Offset(0, 2),
           ),
         ],
       ),
+      child: IconButton(
+        icon: Icon(icon, size: 20, color: const Color(0xFF1E293B)),
+        padding: EdgeInsets.zero,
+        onPressed: onPressed,
+      ),
     );
-  }
-}
-
-class _VectorGridPainter extends CustomPainter {
-  final Color gridColor;
-  final OpenFreeMapStyle style;
-  final List<Offset> routePoints;
-  final bool has3d;
-
-  _VectorGridPainter({
-    required this.gridColor,
-    required this.style,
-    required this.routePoints,
-    required this.has3d,
-  });
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = gridColor
-      ..strokeWidth = 1.0;
-
-    const step = 48.0;
-    for (double x = 0; x < size.width; x += step) {
-      canvas.drawLine(Offset(x, 0), Offset(x, size.height), paint);
-    }
-    for (double y = 0; y < size.height; y += step) {
-      canvas.drawLine(Offset(0, y), Offset(size.width, y), paint);
-    }
-
-    final roadPaint = Paint()
-      ..color = gridColor.withValues(alpha: (gridColor.a * 2).clamp(0.0, 1.0))
-      ..strokeWidth = 3.0;
-
-    canvas.drawLine(Offset(0, size.height * 0.45), Offset(size.width, size.height * 0.55), roadPaint);
-    canvas.drawLine(Offset(size.width * 0.35, 0), Offset(size.width * 0.65, size.height), roadPaint);
-
-    if (has3d) {
-      final buildingPaint = Paint()..color = const Color(0xFF94A3B8).withValues(alpha: 0.35);
-      canvas.drawRRect(
-        RRect.fromRectAndRadius(Rect.fromLTWH(size.width * 0.18, size.height * 0.22, 48, 70), const Radius.circular(4)),
-        buildingPaint,
-      );
-      canvas.drawRRect(
-        RRect.fromRectAndRadius(Rect.fromLTWH(size.width * 0.72, size.height * 0.58, 36, 90), const Radius.circular(4)),
-        buildingPaint,
-      );
-    }
-
-    if (routePoints.length >= 2) {
-      final casingPaint = Paint()
-        ..color = const Color(0xFF174EA6)
-        ..strokeWidth = 7.5
-        ..strokeCap = StrokeCap.round
-        ..style = PaintingStyle.stroke;
-
-      final routePaint = Paint()
-        ..color = const Color(0xFF4285F4)
-        ..strokeWidth = 5.0
-        ..strokeCap = StrokeCap.round
-        ..style = PaintingStyle.stroke;
-
-      final routePath = Path()..moveTo(routePoints.first.dx, routePoints.first.dy);
-      for (var i = 1; i < routePoints.length; i++) {
-        routePath.lineTo(routePoints[i].dx, routePoints[i].dy);
-      }
-      canvas.drawPath(routePath, casingPaint);
-      canvas.drawPath(routePath, routePaint);
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _VectorGridPainter oldDelegate) {
-    return oldDelegate.gridColor != gridColor ||
-        oldDelegate.style != style ||
-        oldDelegate.has3d != has3d ||
-        oldDelegate.routePoints != routePoints;
   }
 }
