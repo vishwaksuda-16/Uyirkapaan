@@ -4,7 +4,6 @@ import 'package:uyirkappan_bystander/data/datasources/mock/mock_emergency_reques
 import 'package:uyirkappan_bystander/data/repositories/emergency_request_repository_impl.dart';
 import 'package:uyirkappan_bystander/presentation/controllers/emergency_controller.dart';
 import 'package:uyirkappan_bystander/presentation/controllers/location_controller.dart';
-import 'package:uyirkappan_bystander/presentation/controllers/simulation_controller.dart';
 import 'package:uyirkappan_bystander/presentation/screens/home/home_screen.dart';
 import '../unit/mock_repository_test.dart';
 
@@ -20,14 +19,12 @@ void main() {
 
       final emergencyController = EmergencyController(repository: repository);
       final locationController = LocationController();
-      final simulationController = SimulationController(mockDataSource: mockDataSource);
 
       await tester.pumpWidget(
         MaterialApp(
           home: HomeScreen(
             emergencyController: emergencyController,
             locationController: locationController,
-            simulationController: simulationController,
           ),
         ),
       );

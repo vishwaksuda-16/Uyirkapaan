@@ -1,6 +1,7 @@
 import '../../domain/entities/request_status.dart';
 import '../../domain/entities/tracking_info.dart';
 import 'eta_model.dart';
+import 'location_model.dart';
 
 /// Data model for TrackingInfo with JSON serialization.
 class TrackingModel extends TrackingInfo {
@@ -17,6 +18,7 @@ class TrackingModel extends TrackingInfo {
     super.vehicleNumber,
     super.driverName,
     super.driverPhone,
+    super.routeWaypoints,
   });
 
   factory TrackingModel.fromJson(Map<String, dynamic> json) {
@@ -35,6 +37,11 @@ class TrackingModel extends TrackingInfo {
       vehicleNumber: json['vehicleNumber'] as String?,
       driverName: json['driverName'] as String?,
       driverPhone: json['driverPhone'] as String?,
+      routeWaypoints: json['routeWaypoints'] != null
+          ? (json['routeWaypoints'] as List)
+              .map((w) => LocationModel.fromJson(w as Map<String, dynamic>))
+              .toList()
+          : null,
     );
   }
 
@@ -52,6 +59,7 @@ class TrackingModel extends TrackingInfo {
       vehicleNumber: entity.vehicleNumber,
       driverName: entity.driverName,
       driverPhone: entity.driverPhone,
+      routeWaypoints: entity.routeWaypoints,
     );
   }
 
@@ -69,6 +77,11 @@ class TrackingModel extends TrackingInfo {
       if (vehicleNumber != null) 'vehicleNumber': vehicleNumber,
       if (driverName != null) 'driverName': driverName,
       if (driverPhone != null) 'driverPhone': driverPhone,
+      if (routeWaypoints != null)
+        'routeWaypoints': routeWaypoints!
+            .map((w) => w is LocationModel ? w.toJson() : LocationModel.fromEntity(w).toJson())
+            .toList(),
     };
   }
 }
+

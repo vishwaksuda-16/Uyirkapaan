@@ -7,14 +7,12 @@ import 'data/datasources/mock/mock_emergency_request_datasource.dart';
 import 'data/datasources/mock/mock_tracking_datasource.dart';
 import 'data/datasources/remote/remote_auth_datasource.dart';
 import 'data/datasources/remote/remote_emergency_request_datasource.dart';
-import 'data/datasources/remote/remote_tracking_datasource.dart';
 import 'data/datasources/remote/socket_service.dart';
 import 'data/repositories/emergency_request_repository_impl.dart';
 import 'data/repositories/tracking_repository_impl.dart';
 import 'presentation/controllers/auth_controller.dart';
 import 'presentation/controllers/emergency_controller.dart';
 import 'presentation/controllers/location_controller.dart';
-import 'presentation/controllers/simulation_controller.dart';
 import 'routing/app_router.dart';
 import 'routing/route_paths.dart';
 
@@ -31,6 +29,10 @@ void main() async {
   // 3. Initialize Authentication (Module 1 Integration)
   final remoteAuthDataSource = RemoteAuthDataSource(client: httpClient);
   final authController = AuthController(authDataSource: remoteAuthDataSource);
+  await authController.checkExistingAuth();
+  if (!authController.isAuthenticated) {
+    await authController.loginDemo();
+  }
 
   // Only connect to live Socket.IO if live backend mode is active
   if (useRemoteBackendNotifier.value) {
@@ -44,45 +46,41 @@ void main() async {
     }
   });
 
-  // 4. Initialize Simulation DataSources
-  final mockTrackingDataSource = MockTrackingDataSource(socketService: socketService);
-  final mockRequestDataSource = MockEmergencyRequestDataSource(
-    trackingDataSource: mockTrackingDataSource,
+  // 4. Initialize Mock Data Sources (with live vehicle tracking & road routing)
+  final mockTrackingDataSource = MockTrackingDataSource(
     socketService: socketService,
   );
+  final mockRequestDataSource = MockEmergencyRequestDataSource(
+    socketService: socketService,
+    trackingDataSource: mockTrackingDataSource,
+  );
 
-  // 5. Initialize Remote REST DataSources
+  final adaptiveTrackingDataSource = AdaptiveTrackingDataSource(
+    mockDataSource: mockTrackingDataSource,
+    useRemoteNotifier: useRemoteBackendNotifier,
+  );
+  final trackingRepository = TrackingRepositoryImpl(
+    dataSource: adaptiveTrackingDataSource,
+  );
+
+  // 5. Initialize Remote REST DataSource
   final remoteRequestDataSource = RemoteEmergencyRequestDataSource(
     client: httpClient,
     tokenProvider: () async => authController.token,
     socketService: socketService,
   );
-  final remoteTrackingDataSource = RemoteTrackingDataSource(
-    client: httpClient,
-    tokenProvider: () async => authController.token,
-    socketService: socketService,
-  );
 
-  // 6. Initialize Adaptive DataSources (Seamless Live Backend <-> Simulation Mode)
+  // 6. Initialize Adaptive DataSource (Seamless Live Backend <-> Local Mode)
   final adaptiveRequestDataSource = AdaptiveEmergencyRequestDataSource(
     remoteDataSource: remoteRequestDataSource,
     mockDataSource: mockRequestDataSource,
     useRemoteNotifier: useRemoteBackendNotifier,
   );
-  final adaptiveTrackingDataSource = AdaptiveTrackingDataSource(
-    remoteDataSource: remoteTrackingDataSource,
-    mockDataSource: mockTrackingDataSource,
-    useRemoteNotifier: useRemoteBackendNotifier,
-  );
 
-  // 7. Initialize Repositories using Abstract Interfaces
+  // 7. Initialize Repository using Abstract Interface
   final emergencyRepository = EmergencyRequestRepositoryImpl(
     dataSource: adaptiveRequestDataSource,
     localDataSource: localDataSource,
-  );
-
-  final trackingRepository = TrackingRepositoryImpl(
-    dataSource: adaptiveTrackingDataSource,
   );
 
   // 8. Initialize Presentation Controllers
@@ -91,16 +89,14 @@ void main() async {
     repository: emergencyRepository,
     socketService: socketService,
   );
-  final simulationController = SimulationController(mockDataSource: mockRequestDataSource);
 
   // 9. Initialize App Router
   final appRouter = AppRouter(
     emergencyController: emergencyController,
     locationController: locationController,
-    simulationController: simulationController,
-    trackingRepository: trackingRepository,
     authController: authController,
     socketService: socketService,
+    trackingRepository: trackingRepository,
   );
 
   runApp(UyirKappanBystanderApp(
@@ -134,9 +130,7 @@ class UyirKappanBystanderApp extends StatelessWidget {
           theme: AppTheme.lightTheme,
           darkTheme: AppTheme.darkTheme,
           themeMode: themeMode,
-          initialRoute: (authController?.isAuthenticated == true)
-              ? RoutePaths.home
-              : RoutePaths.auth,
+          initialRoute: RoutePaths.home,
           onGenerateRoute: appRouter.onGenerateRoute,
           builder: (context, child) {
             return child ?? const SizedBox.shrink();

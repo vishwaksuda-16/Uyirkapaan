@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:math' as math;
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import '../../../core/constants/app_constants.dart';
 import '../../../core/constants/map_constants.dart';
@@ -8,18 +10,17 @@ import '../../../domain/entities/emergency_type.dart';
 import '../../../domain/entities/location_data.dart';
 import '../../../domain/entities/nearby_poi.dart';
 import '../../../domain/entities/request_status.dart';
-import '../../../domain/entities/tracking_info.dart';
-import '../../../domain/repositories/tracking_repository.dart';
 import '../../../routing/route_paths.dart';
 import '../../controllers/emergency_controller.dart';
 import '../../controllers/location_controller.dart';
-import '../../controllers/simulation_controller.dart';
+import '../../../core/utils/map_route_geometry.dart';
+import '../../../domain/entities/tracking_info.dart';
+import '../../../domain/repositories/tracking_repository.dart';
 import '../../widgets/counter_stepper.dart';
 import '../../widgets/emergency_button.dart';
 import '../../widgets/map/map_style_selector.dart';
 import '../../widgets/map/openfreemap_view.dart';
 import '../../widgets/status_badge.dart';
-import '../../../core/utils/map_route_geometry.dart';
 import '../../../main.dart';
 import '../../controllers/auth_controller.dart';
 import '../../../data/datasources/remote/socket_service.dart';
@@ -31,19 +32,17 @@ import '../../../data/datasources/adaptive/adaptive_datasources.dart';
 class HomeScreen extends StatefulWidget {
   final EmergencyController emergencyController;
   final LocationController locationController;
-  final SimulationController simulationController;
-  final TrackingRepository? trackingRepository;
   final AuthController? authController;
   final SocketService? socketService;
+  final TrackingRepository? trackingRepository;
 
   const HomeScreen({
     super.key,
     required this.emergencyController,
     required this.locationController,
-    required this.simulationController,
-    this.trackingRepository,
     this.authController,
     this.socketService,
+    this.trackingRepository,
   });
 
   @override
@@ -52,15 +51,19 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   OpenFreeMapStyle _selectedMapStyle = OpenFreeMapStyle.bright;
-  TrackingInfo? _currentTelemetry;
-  StreamSubscription<TrackingInfo>? _trackingSubscription;
-  String? _lastSubscribedRequestId;
   bool _showHospitals = true;
   bool _showAmbulances = true;
   bool _isPinLocked = false;
   int _recenterCounter = 0;
   String? _activeTopBannerMessage;
   Timer? _topBannerTimer;
+  final ScrollController _desktopCategoryScrollController = ScrollController();
+  final ScrollController _mobileCategoryScrollController = ScrollController();
+  bool _hasAutoCenteredGps = false;
+
+  TrackingInfo? _currentTelemetry;
+  StreamSubscription? _trackingSubscription;
+  String? _lastSubscribedRequestId;
 
   @override
   void initState() {
@@ -81,11 +84,13 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void dispose() {
     _topBannerTimer?.cancel();
+    _desktopCategoryScrollController.dispose();
+    _mobileCategoryScrollController.dispose();
+    _trackingSubscription?.cancel();
     widget.emergencyController.removeListener(_onEmergencyStateChanged);
     widget.locationController.removeListener(_onLocationChanged);
     widget.authController?.removeListener(_onAuthStateChanged);
     useRemoteBackendNotifier.removeListener(_onBackendModeChanged);
-    _trackingSubscription?.cancel();
     super.dispose();
   }
 
@@ -124,16 +129,14 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  void _onLocationChanged() {
-    if (mounted) setState(() {});
-  }
-
   void _checkAndSubscribeTracking() {
     final activeRequest = widget.emergencyController.activeRequest;
     if (activeRequest != null && activeRequest.status.isActive && widget.trackingRepository != null) {
-      if (_lastSubscribedRequestId != activeRequest.requestId) {
+      final isNewRequest = _lastSubscribedRequestId != activeRequest.requestId;
+      if (isNewRequest) {
         _lastSubscribedRequestId = activeRequest.requestId;
         _trackingSubscription?.cancel();
+
         _trackingSubscription = widget.trackingRepository!
             .watchTrackingUpdates(activeRequest.requestId)
             .listen((telemetry) {
@@ -142,13 +145,93 @@ class _HomeScreenState extends State<HomeScreen> {
           }
         });
       }
+
+      // Only query initial snapshot if telemetry has not arrived yet
+      if (_currentTelemetry == null) {
+        widget.trackingRepository!.getTrackingInfo(activeRequest.requestId).then((info) {
+          if (mounted && info != null && _currentTelemetry == null) {
+            setState(() => _currentTelemetry = info);
+          }
+        });
+      }
     } else {
       if (_lastSubscribedRequestId != null) {
         _lastSubscribedRequestId = null;
         _trackingSubscription?.cancel();
         _trackingSubscription = null;
+        if (_currentTelemetry != null) {
+          setState(() => _currentTelemetry = null);
+        }
       }
     }
+  }
+
+  List<LocationData>? _calculateActiveRoute({
+    required EmergencyRequest? activeRequest,
+    required bool isAmbulanceAssigned,
+    required bool isNoAmbulanceAvailable,
+    required LocationData? incidentLocation,
+    required LocationData? ambulanceLocation,
+    required NearbyHospital? assignedHospital,
+  }) {
+    if (incidentLocation == null || assignedHospital == null) return null;
+
+    final hospLoc = LocationData(
+      latitude: assignedHospital.latitude,
+      longitude: assignedHospital.longitude,
+      timestamp: DateTime.now(),
+    );
+
+    if (isNoAmbulanceAvailable) {
+      return MapRouteGeometry.buildSimulatedRoute(
+        from: incidentLocation,
+        to: hospLoc,
+      );
+    }
+
+    if (!isAmbulanceAssigned || ambulanceLocation == null || activeRequest == null) {
+      return null;
+    }
+
+    final status = activeRequest.status;
+
+    if (status == RequestStatus.arrivedAtPatient ||
+        status == RequestStatus.patientOnboard ||
+        status == RequestStatus.enRouteToHospital ||
+        status == RequestStatus.arrivedAtHospital) {
+      return MapRouteGeometry.buildSimulatedRoute(
+        from: ambulanceLocation,
+        to: hospLoc,
+      );
+    }
+
+    final pickupLeg = MapRouteGeometry.buildSimulatedRoute(
+      from: ambulanceLocation,
+      to: incidentLocation,
+    );
+    final dropLeg = MapRouteGeometry.buildSimulatedRoute(
+      from: incidentLocation,
+      to: hospLoc,
+    );
+
+    return [
+      ...pickupLeg,
+      ...dropLeg.skip(1),
+    ];
+  }
+
+  void _onLocationChanged() {
+    if (!mounted) return;
+    final devLoc = widget.locationController.deviceLocation;
+    if (!_hasAutoCenteredGps && devLoc != null) {
+      final isDefault = (devLoc.latitude - MapConstants.defaultLatitude).abs() < 1e-4 &&
+          (devLoc.longitude - MapConstants.defaultLongitude).abs() < 1e-4;
+      if (!isDefault) {
+        _hasAutoCenteredGps = true;
+        _recenterCounter++;
+      }
+    }
+    setState(() {});
   }
 
   void _togglePinLock() {
@@ -184,105 +267,43 @@ class _HomeScreenState extends State<HomeScreen> {
 
     await widget.emergencyController.submitEmergencyRequest(
       emergencyLocation: loc,
+      requesterLocation: widget.locationController.deviceLocation,
+      requesterId: widget.authController?.currentUser?.id,
     );
   }
 
   void _showCancelDialog() {
+    OpenFreeMapView.setUIHovered(true);
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Cancel Emergency Request?'),
-        content: const Text(
-          'Are you sure you want to cancel this ambulance dispatch? This action will recall the assigned emergency unit.',
+      builder: (ctx) => MouseRegion(
+        onEnter: (_) => OpenFreeMapView.setUIHovered(true),
+        onExit: (_) => OpenFreeMapView.setUIHovered(false),
+        child: AlertDialog(
+          title: const Text('Cancel Emergency Request?'),
+          content: const Text(
+            'Are you sure you want to cancel this ambulance dispatch? This action will recall the assigned emergency unit.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('KEEP REQUEST ACTIVE'),
+            ),
+            FilledButton(
+              onPressed: () async {
+                Navigator.pop(ctx);
+                await widget.emergencyController.cancelActiveRequest(reason: 'Cancelled by user');
+              },
+              style: FilledButton.styleFrom(backgroundColor: AppColors.emergencyRed),
+              child: const Text('CANCEL EMERGENCY'),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('KEEP REQUEST ACTIVE'),
-          ),
-          FilledButton(
-            onPressed: () async {
-              Navigator.pop(ctx);
-              await widget.emergencyController.cancelActiveRequest(reason: 'Cancelled by user');
-              setState(() => _currentTelemetry = null);
-            },
-            style: FilledButton.styleFrom(backgroundColor: AppColors.emergencyRed),
-            child: const Text('CANCEL EMERGENCY'),
-          ),
-        ],
       ),
-    );
+    ).whenComplete(() => OpenFreeMapView.setUIHovered(false));
   }
 
-  Widget _buildBackendModePill({required bool isDesktop}) {
-    return ValueListenableBuilder<bool>(
-      valueListenable: useRemoteBackendNotifier,
-      builder: (context, isRemote, _) {
-        final color = isRemote ? const Color(0xFF16A34A) : Colors.amber.shade800;
-        final label = isDesktop
-            ? (isRemote ? 'LIVE BACKEND' : 'SIMULATION')
-            : (isRemote ? 'LIVE' : 'SIM');
-        return Tooltip(
-          message: isRemote
-              ? 'Connected to Node.js Backend (http://localhost:4000). Click to toggle Simulation.'
-              : 'Running in Demonstration Simulation Mode. Click to toggle Live Backend.',
-          child: InkWell(
-            onTap: () {
-              useRemoteBackendNotifier.value = !isRemote;
-              ScaffoldMessenger.of(context).hideCurrentSnackBar();
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text(
-                    !isRemote
-                        ? '⚡ Switched to Live Backend Mode (http://localhost:4000)'
-                        : '🧪 Switched to Local Simulation Mode',
-                    style: const TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                  duration: const Duration(seconds: 3),
-                  behavior: SnackBarBehavior.floating,
-                ),
-              );
-            },
-            borderRadius: BorderRadius.circular(20),
-            child: Container(
-              padding: EdgeInsets.symmetric(
-                horizontal: isDesktop ? 12 : 7,
-                vertical: isDesktop ? 7 : 4,
-              ),
-              decoration: BoxDecoration(
-                color: color.withValues(alpha: 0.15),
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: color, width: 1.2),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Container(
-                    width: isDesktop ? 7 : 5,
-                    height: isDesktop ? 7 : 5,
-                    decoration: BoxDecoration(
-                      color: color,
-                      shape: BoxShape.circle,
-                    ),
-                  ),
-                  const SizedBox(width: 4),
-                  Text(
-                    label,
-                    style: TextStyle(
-                      color: color,
-                      fontSize: isDesktop ? 11 : 9.5,
-                      fontWeight: FontWeight.w900,
-                      letterSpacing: 0.3,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
+
 
   Widget _buildAuthUserPill({required bool isDesktop}) {
     final auth = widget.authController;
@@ -402,6 +423,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final passController = TextEditingController(text: 'password123');
     bool obscurePassword = true;
 
+    OpenFreeMapView.setUIHovered(true);
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -410,9 +432,12 @@ class _HomeScreenState extends State<HomeScreen> {
         final auth = widget.authController;
         final user = auth?.currentUser;
 
-        return StatefulBuilder(
-          builder: (context, setModalState) {
-            return Material(
+        return MouseRegion(
+          onEnter: (_) => OpenFreeMapView.setUIHovered(true),
+          onExit: (_) => OpenFreeMapView.setUIHovered(false),
+          child: StatefulBuilder(
+            builder: (context, setModalState) {
+              return Material(
               color: isDark ? const Color(0xFF0F172A) : Colors.white,
               borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
               clipBehavior: Clip.antiAlias,
@@ -615,9 +640,10 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           );
         },
-      );
-      },
+      ),
     );
+    },
+    ).whenComplete(() => OpenFreeMapView.setUIHovered(false));
   }
 
   Widget _buildProfileInfoRow(IconData icon, String label, String value) {
@@ -642,149 +668,151 @@ class _HomeScreenState extends State<HomeScreen> {
     if (!mounted) return;
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
+    OpenFreeMapView.setUIHovered(true);
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (ctx) {
-        return Material(
-          color: isDark ? const Color(0xFF0F172A) : Colors.white,
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
-          clipBehavior: Clip.antiAlias,
-          child: Container(
-            height: MediaQuery.of(ctx).size.height * 0.75,
-            padding: const EdgeInsets.all(24),
-            child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        return MouseRegion(
+          onEnter: (_) => OpenFreeMapView.setUIHovered(true),
+          onExit: (_) => OpenFreeMapView.setUIHovered(false),
+          child: Material(
+            color: isDark ? const Color(0xFF0F172A) : Colors.white,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+            clipBehavior: Clip.antiAlias,
+            child: Container(
+              height: MediaQuery.of(ctx).size.height * 0.75,
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Row(
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Icon(Icons.history_rounded, color: AppColors.emergencyRed, size: 24),
-                      SizedBox(width: 8),
-                      Text(
-                        'Past Emergency Requests',
-                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
+                      const Row(
+                        children: [
+                          Icon(Icons.history_rounded, color: AppColors.emergencyRed, size: 24),
+                          SizedBox(width: 8),
+                          Text(
+                            'Past Emergency Requests',
+                            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
+                          ),
+                        ],
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.close_rounded),
+                        onPressed: () => Navigator.pop(ctx),
                       ),
                     ],
                   ),
-                  IconButton(
-                    icon: const Icon(Icons.close_rounded),
-                    onPressed: () => Navigator.pop(ctx),
+                  const SizedBox(height: 6),
+                  Text(
+                    'Local & Cloud Emergency Dispatch Audit Log',
+                    style: TextStyle(fontSize: 12, color: isDark ? Colors.white60 : AppColors.textSecondaryLight),
+                  ),
+                  const SizedBox(height: 16),
+                  const Divider(),
+                  Expanded(
+                    child: requests.isEmpty
+                        ? Center(
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(Icons.inbox_rounded, size: 48, color: isDark ? Colors.white24 : Colors.black26),
+                                const SizedBox(height: 12),
+                                const Text('No past emergency requests found', style: TextStyle(fontWeight: FontWeight.bold)),
+                                const SizedBox(height: 4),
+                                Text(
+                                  'Requests submitted from this browser session will appear here.',
+                                  style: TextStyle(fontSize: 12, color: isDark ? Colors.white54 : Colors.black45),
+                                ),
+                              ],
+                            ),
+                          )
+                        : ListView.separated(
+                            itemCount: requests.length,
+                            separatorBuilder: (_, __) => const Divider(height: 1),
+                            itemBuilder: (context, idx) {
+                              final r = requests[idx];
+                              return ListTile(
+                                contentPadding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+                                onTap: () => _showRequestDetailDialog(context, r),
+                                leading: Container(
+                                  padding: const EdgeInsets.all(8),
+                                  decoration: BoxDecoration(
+                                    color: AppColors.emergencyRed.withValues(alpha: 0.12),
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                  child: const Icon(Icons.emergency_rounded, color: AppColors.emergencyRed, size: 20),
+                                ),
+                                title: Row(
+                                  children: [
+                                    Text(r.requestId, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 13.5)),
+                                    const SizedBox(width: 8),
+                                    StatusBadge(status: r.status),
+                                  ],
+                                ),
+                                subtitle: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const SizedBox(height: 3),
+                                    Text(
+                                      'Type: ${r.emergencyType.name.toUpperCase()} • Victims: ${r.victimCount}',
+                                      style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600),
+                                    ),
+                                    Text(
+                                      'Created: ${r.createdAt.toLocal().toString().substring(0, 19)}',
+                                      style: TextStyle(fontSize: 10.5, color: isDark ? Colors.white54 : Colors.black45),
+                                    ),
+                                  ],
+                                ),
+                              );
+                            },
+                          ),
                   ),
                 ],
               ),
-              const SizedBox(height: 6),
-              Text(
-                'Persistent log of emergency requests (Verification Section 13)',
-                style: TextStyle(fontSize: 12, color: isDark ? Colors.white60 : Colors.black54),
-              ),
-              const SizedBox(height: 14),
-              const Divider(),
-              Expanded(
-                child: requests.isEmpty
-                    ? Center(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(Icons.assignment_outlined, size: 48, color: isDark ? Colors.white24 : Colors.black26),
-                            const SizedBox(height: 12),
-                            const Text('No past emergency requests recorded yet'),
-                          ],
-                        ),
-                      )
-                    : ListView.separated(
-                        itemCount: requests.length,
-                        separatorBuilder: (_, __) => const SizedBox(height: 10),
-                        itemBuilder: (context, index) {
-                          final r = requests[index];
-                          return InkWell(
-                            onTap: () => _showRequestDetailDialog(context, r),
-                            borderRadius: BorderRadius.circular(14),
-                            child: Container(
-                              padding: const EdgeInsets.all(14),
-                              decoration: BoxDecoration(
-                                color: isDark ? const Color(0xFF1E293B) : const Color(0xFFF8FAFC),
-                                borderRadius: BorderRadius.circular(14),
-                                border: Border.all(color: isDark ? Colors.white12 : Colors.black12),
-                              ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Row(
-                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                    children: [
-                                      Text(
-                                        r.requestId,
-                                        style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 14),
-                                      ),
-                                      StatusBadge(status: r.status),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 6),
-                                  Row(
-                                    children: [
-                                      Icon(r.emergencyType.icon, size: 15, color: AppColors.emergencyRed),
-                                      const SizedBox(width: 5),
-                                      Text(
-                                        r.emergencyType.displayName,
-                                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
-                                      ),
-                                      const SizedBox(width: 10),
-                                      Text('• Victims: ${r.victimCount}', style: const TextStyle(fontSize: 11)),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    'Created: ${r.createdAt.toLocal().toString().substring(0, 19)}',
-                                    style: TextStyle(fontSize: 10.5, color: isDark ? Colors.white54 : Colors.black45),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          );
-                        },
-                      ),
-              ),
-            ],
+            ),
           ),
-        ),
-      );
-    },
-    );
+        );
+      },
+    ).whenComplete(() => OpenFreeMapView.setUIHovered(false));
   }
 
   void _showRequestDetailDialog(BuildContext context, EmergencyRequest r) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
+    OpenFreeMapView.setUIHovered(true);
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: isDark ? const Color(0xFF0F172A) : Colors.white,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: Text('Emergency Details: ${r.requestId}', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _buildDetailItem('requestId', r.requestId),
-            _buildDetailItem('emergencyType', r.emergencyType.code),
-            _buildDetailItem('victimCount', '${r.victimCount}'),
-            _buildDetailItem('pickupLocation', '${r.emergencyLocation.latitude.toStringAsFixed(4)}, ${r.emergencyLocation.longitude.toStringAsFixed(4)}'),
-            _buildDetailItem('destinationHospitalId', r.hospitalDestination ?? 'N/A'),
-            _buildDetailItem('assignedAmbulanceId', r.assignedAmbulanceId ?? 'N/A'),
-            _buildDetailItem('status', '${r.status.code} ("${r.status.userMessage}")'),
-            _buildDetailItem('currentETA', r.currentETA != null ? '${r.currentETA} min' : 'N/A'),
-            _buildDetailItem('attempts', '${r.attempts}'),
+      builder: (ctx) => MouseRegion(
+        onEnter: (_) => OpenFreeMapView.setUIHovered(true),
+        onExit: (_) => OpenFreeMapView.setUIHovered(false),
+        child: AlertDialog(
+          backgroundColor: isDark ? const Color(0xFF0F172A) : Colors.white,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: Text('Emergency Details: ${r.requestId}', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _buildDetailItem('requestId', r.requestId),
+              _buildDetailItem('emergencyType', r.emergencyType.code),
+              _buildDetailItem('victimCount', '${r.victimCount}'),
+              _buildDetailItem('pickupLocation', '${r.emergencyLocation.latitude.toStringAsFixed(4)}, ${r.emergencyLocation.longitude.toStringAsFixed(4)}'),
+              _buildDetailItem('destinationHospitalId', r.hospitalDestination ?? 'N/A'),
+              _buildDetailItem('assignedAmbulanceId', r.assignedAmbulanceId ?? 'N/A'),
+              _buildDetailItem('status', '${r.status.code} ("${r.status.userMessage}")'),
+              _buildDetailItem('attempts', '${r.attempts}'),
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('CLOSE')),
           ],
         ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('CLOSE')),
-        ],
       ),
-    );
+    ).whenComplete(() => OpenFreeMapView.setUIHovered(false));
   }
 
   Widget _buildDetailItem(String key, String val) {
@@ -802,103 +830,109 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _showVoiceAssistanceModal() {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final loc = widget.locationController.currentLocation;
+    final loc = widget.locationController.emergencyLocation ?? widget.locationController.currentLocation;
 
+    OpenFreeMapView.setUIHovered(true);
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: isDark ? const Color(0xFF0F172A) : Colors.white,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-        title: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: AppColors.emergencyRed.withValues(alpha: 0.15),
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(Icons.phone_in_talk_rounded, color: AppColors.emergencyRed, size: 22),
-            ),
-            const SizedBox(width: 10),
-            const Expanded(
-              child: Text(
-                '108 Voice Emergency Helpline',
-                style: TextStyle(fontSize: 16.5, fontWeight: FontWeight.w900),
-              ),
-            ),
-          ],
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Direct Toll-Free Voice Assistance & Automated Triage (Section 14)',
-              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.textSecondaryLight),
-            ),
-            const SizedBox(height: 14),
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: isDark ? const Color(0xFF1E293B) : const Color(0xFFEFF6FF),
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: Colors.blue.withValues(alpha: 0.3)),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Row(
-                    children: [
-                      Icon(Icons.mic_rounded, color: Colors.blue, size: 16),
-                      SizedBox(width: 6),
-                      Text('Simulated Voice IVR Connected', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 12, color: Colors.blue)),
-                    ],
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    'GPS Location Confirmed: ${loc.latitude.toStringAsFixed(4)}, ${loc.longitude.toStringAsFixed(4)} (Accuracy: ${loc.accuracy?.toStringAsFixed(0) ?? "15"}m)',
-                    style: const TextStyle(fontSize: 11),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 14),
-            const Text(
-              'Tapping "Dispatch Voice Emergency" initiates immediate ambulance allocation and follows the exact backend workflow.',
-              style: TextStyle(fontSize: 11.5),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('CANCEL'),
-          ),
-          FilledButton.icon(
-            onPressed: () async {
-              Navigator.pop(ctx);
-              await widget.emergencyController.submitEmergencyRequest(
-                emergencyLocation: loc,
-                requesterId: widget.authController?.currentUser?.id,
-              );
-              if (!mounted) return;
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('📞 108 Voice Emergency Request Dispatched! Searching for ambulance...'),
-                  backgroundColor: AppColors.emergencyRed,
+      builder: (ctx) => MouseRegion(
+        onEnter: (_) => OpenFreeMapView.setUIHovered(true),
+        onExit: (_) => OpenFreeMapView.setUIHovered(false),
+        child: AlertDialog(
+          backgroundColor: isDark ? const Color(0xFF0F172A) : Colors.white,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+          title: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: AppColors.emergencyRed.withValues(alpha: 0.15),
+                  shape: BoxShape.circle,
                 ),
-              );
-            },
-            icon: const Icon(Icons.send_rounded, size: 16),
-            label: const Text('DISPATCH VOICE EMERGENCY'),
-            style: FilledButton.styleFrom(
-              backgroundColor: AppColors.emergencyRed,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            ),
+                child: const Icon(Icons.phone_in_talk_rounded, color: AppColors.emergencyRed, size: 22),
+              ),
+              const SizedBox(width: 10),
+              const Expanded(
+                child: Text(
+                  '108 Voice Emergency Helpline',
+                  style: TextStyle(fontSize: 16.5, fontWeight: FontWeight.w900),
+                ),
+              ),
+            ],
           ),
-        ],
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Direct Toll-Free Voice Assistance & Automated Triage (Section 14)',
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.textSecondaryLight),
+              ),
+              const SizedBox(height: 14),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: isDark ? const Color(0xFF1E293B) : const Color(0xFFEFF6FF),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: Colors.blue.withValues(alpha: 0.3)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Row(
+                      children: [
+                        Icon(Icons.mic_rounded, color: Colors.blue, size: 16),
+                        SizedBox(width: 6),
+                        Text('Simulated Voice IVR Connected', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 12, color: Colors.blue)),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'Emergency Location: ${loc.latitude.toStringAsFixed(4)}, ${loc.longitude.toStringAsFixed(4)} (Accuracy: ${loc.accuracy?.toStringAsFixed(0) ?? "15"}m)',
+                      style: const TextStyle(fontSize: 11),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 14),
+              const Text(
+                'Tapping "Dispatch Voice Emergency" initiates immediate ambulance allocation to the emergency incident location.',
+                style: TextStyle(fontSize: 11.5),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('CANCEL'),
+            ),
+            FilledButton.icon(
+              onPressed: () async {
+                Navigator.pop(ctx);
+                await widget.emergencyController.submitEmergencyRequest(
+                  emergencyLocation: loc,
+                  requesterLocation: widget.locationController.deviceLocation,
+                  requesterId: widget.authController?.currentUser?.id,
+                );
+                if (!mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('📞 108 Voice Emergency Request Dispatched! Searching for ambulance...'),
+                    backgroundColor: AppColors.emergencyRed,
+                  ),
+                );
+              },
+              icon: const Icon(Icons.send_rounded, size: 16),
+              label: const Text('DISPATCH VOICE EMERGENCY'),
+              style: FilledButton.styleFrom(
+                backgroundColor: AppColors.emergencyRed,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+            ),
+          ],
+        ),
       ),
-    );
+    ).whenComplete(() => OpenFreeMapView.setUIHovered(false));
   }
 
   void _toggleThemeMode() {
@@ -968,63 +1002,6 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  /// Computes simulated street navigation waypoints for realistic Google Maps route rendering.
-  List<LocationData>? _calculateActiveRoute({
-    required EmergencyRequest? activeRequest,
-    required bool isAmbulanceAssigned,
-    required bool isNoAmbulanceAvailable,
-    required LocationData? incidentLocation,
-    required LocationData? ambulanceLocation,
-    required NearbyHospital? assignedHospital,
-  }) {
-    if (incidentLocation == null || assignedHospital == null) return null;
-
-    final hospLoc = LocationData(
-      latitude: assignedHospital.latitude,
-      longitude: assignedHospital.longitude,
-      timestamp: DateTime.now(),
-    );
-
-    if (isNoAmbulanceAvailable) {
-      // Scenario 4: Fast corridor to nearest trauma hospital for emergency self-transport
-      return MapRouteGeometry.buildSimulatedRoute(
-        from: incidentLocation,
-        to: hospLoc,
-      );
-    }
-
-    if (!isAmbulanceAssigned || ambulanceLocation == null || activeRequest == null) {
-      return null;
-    }
-
-    final status = activeRequest.status;
-
-    if (status == RequestStatus.patientOnboard ||
-        status == RequestStatus.enRouteToHospital ||
-        status == RequestStatus.arrivedAtHospital) {
-      // Hospital leg: Ambulance actively navigating to emergency hospital
-      return MapRouteGeometry.buildSimulatedRoute(
-        from: ambulanceLocation,
-        to: hospLoc,
-      );
-    }
-
-    // Pickup & Drop: Ambulance -> Incident (Pickup) -> Hospital (Drop)
-    final pickupLeg = MapRouteGeometry.buildSimulatedRoute(
-      from: ambulanceLocation,
-      to: incidentLocation,
-    );
-    final dropLeg = MapRouteGeometry.buildSimulatedRoute(
-      from: incidentLocation,
-      to: hospLoc,
-    );
-
-    return [
-      ...pickupLeg,
-      ...dropLeg.skip(1),
-    ];
-  }
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -1041,15 +1018,6 @@ class _HomeScreenState extends State<HomeScreen> {
 
     // Determine target location for pinpoint / tracking
     final LocationData? incidentLocation = activeRequest?.emergencyLocation ?? widget.locationController.emergencyLocation;
-    final LocationData? ambulanceLocation = (hasActiveRequest && !isNoAmbulanceAvailable && _currentTelemetry != null)
-        ? LocationData(
-            latitude: _currentTelemetry!.latitude,
-            longitude: _currentTelemetry!.longitude,
-            timestamp: _currentTelemetry!.timestamp,
-          )
-        : null;
-
-    final String ambulanceId = _currentTelemetry?.ambulanceId ?? activeRequest?.assignedAmbulanceId ?? 'AMB-CH-042';
 
     // Emergency Network POIs: Hospitals & Standby Ambulances around current location
     final double centerLat = incidentLocation?.latitude ?? MapConstants.defaultLatitude;
@@ -1078,16 +1046,44 @@ class _HomeScreenState extends State<HomeScreen> {
     final List<NearbyHospital> visibleHospitals = (isAmbulanceAssigned || isNoAmbulanceAvailable)
         ? (assignedHospital != null ? [assignedHospital] : const <NearbyHospital>[])
         : (_showHospitals ? hospitals : const <NearbyHospital>[]);
+    final nearestStandby = standbyAmbulances.isNotEmpty ? standbyAmbulances.first : null;
+    final fallbackAmbLoc = nearestStandby != null
+        ? LocationData(
+            latitude: nearestStandby.latitude,
+            longitude: nearestStandby.longitude,
+            timestamp: DateTime.now(),
+          )
+        : (incidentLocation != null
+            ? LocationData(
+                latitude: incidentLocation.latitude + 0.012,
+                longitude: incidentLocation.longitude + 0.012,
+                timestamp: DateTime.now(),
+              )
+            : null);
 
-    // Google Maps blue navigation polyline waypoints
-    final List<LocationData>? activeRouteWaypoints = _calculateActiveRoute(
-      activeRequest: activeRequest,
-      isAmbulanceAssigned: isAmbulanceAssigned,
-      isNoAmbulanceAvailable: isNoAmbulanceAvailable,
-      incidentLocation: incidentLocation,
-      ambulanceLocation: ambulanceLocation,
-      assignedHospital: assignedHospital,
-    );
+    final LocationData? ambulanceLocation = (hasActiveRequest && !isNoAmbulanceAvailable)
+        ? (_currentTelemetry != null
+            ? LocationData(
+                latitude: _currentTelemetry!.latitude,
+                longitude: _currentTelemetry!.longitude,
+                timestamp: _currentTelemetry!.timestamp,
+              )
+            : (isAmbulanceAssigned ? fallbackAmbLoc : null))
+        : null;
+
+    final String ambulanceId = _currentTelemetry?.ambulanceId ?? activeRequest?.assignedAmbulanceId ?? 'AMB-TN-01-108';
+
+    final List<LocationData>? activeRouteWaypoints =
+        (_currentTelemetry?.routeWaypoints != null && _currentTelemetry!.routeWaypoints!.length >= 2)
+            ? _currentTelemetry!.routeWaypoints
+            : _calculateActiveRoute(
+                activeRequest: activeRequest,
+                isAmbulanceAssigned: isAmbulanceAssigned,
+                isNoAmbulanceAvailable: isNoAmbulanceAvailable,
+                incidentLocation: incidentLocation,
+                ambulanceLocation: ambulanceLocation,
+                assignedHospital: assignedHospital,
+              );
 
     return Scaffold(
       body: Stack(
@@ -1095,6 +1091,7 @@ class _HomeScreenState extends State<HomeScreen> {
           // 1. FULL-SCREEN BACKGROUND: OpenFreeMap MapLibre GL JS Vector Map
           Positioned.fill(
             child: OpenFreeMapView(
+              userLocation: widget.locationController.deviceLocation,
               incidentLocation: incidentLocation ??
                   LocationData(
                     latitude: MapConstants.defaultLatitude,
@@ -1128,31 +1125,35 @@ class _HomeScreenState extends State<HomeScreen> {
             top: 0,
             left: 0,
             right: 0,
-            child: SafeArea(
-              child: Center(
-                child: ConstrainedBox(
-                  constraints: BoxConstraints(maxWidth: isDesktop ? 1440 : 540),
-                  child: Padding(
-                    padding: EdgeInsets.symmetric(horizontal: isDesktop ? 20 : 14, vertical: isDesktop ? 10 : 8),
-                    child: isDesktop
-                        ? _buildDesktopTopNavBar(
-                            context: context,
-                            isDark: isDark,
-                            hospitals: hospitals,
-                            standbyAmbulances: standbyAmbulances,
-                            isAmbulanceAssigned: isAmbulanceAssigned,
-                            assignedAmbulanceId: ambulanceId,
-                            assignedHospital: assignedHospital,
-                          )
-                        : _buildMobileTopBar(
-                            context: context,
-                            isDark: isDark,
-                            hospitals: hospitals,
-                            standbyAmbulances: standbyAmbulances,
-                            isAmbulanceAssigned: isAmbulanceAssigned,
-                            assignedAmbulanceId: ambulanceId,
-                            assignedHospital: assignedHospital,
-                          ),
+            child: MouseRegion(
+              onEnter: (_) => OpenFreeMapView.setUIHovered(true),
+              onExit: (_) => OpenFreeMapView.setUIHovered(false),
+              child: SafeArea(
+                child: Center(
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(maxWidth: isDesktop ? 1440 : 540),
+                    child: Padding(
+                      padding: EdgeInsets.symmetric(horizontal: isDesktop ? 20 : 14, vertical: isDesktop ? 10 : 8),
+                      child: isDesktop
+                          ? _buildDesktopTopNavBar(
+                              context: context,
+                              isDark: isDark,
+                              hospitals: hospitals,
+                              standbyAmbulances: standbyAmbulances,
+                              isAmbulanceAssigned: isAmbulanceAssigned,
+                              assignedAmbulanceId: ambulanceId,
+                              assignedHospital: assignedHospital,
+                            )
+                          : _buildMobileTopBar(
+                              context: context,
+                              isDark: isDark,
+                              hospitals: hospitals,
+                              standbyAmbulances: standbyAmbulances,
+                              isAmbulanceAssigned: isAmbulanceAssigned,
+                              assignedAmbulanceId: ambulanceId,
+                              assignedHospital: assignedHospital,
+                            ),
+                    ),
                   ),
                 ),
               ),
@@ -1294,26 +1295,30 @@ class _HomeScreenState extends State<HomeScreen> {
             left: 0,
             right: 0,
             bottom: isDesktop ? 16 : 14,
-            child: SafeArea(
-              top: false,
-              child: Center(
-                child: ConstrainedBox(
-                  constraints: BoxConstraints(maxWidth: isDesktop ? 1440 : 540),
-                  child: Padding(
-                    padding: EdgeInsets.symmetric(horizontal: isDesktop ? 20 : 14),
-                    child: AnimatedSwitcher(
-                      duration: const Duration(milliseconds: 300),
-                      child: isNoAmbulanceAvailable
-                          ? (isDesktop
-                              ? _buildDesktopNoAmbulanceDock(context, activeRequest, assignedHospital, theme, isDark)
-                              : _buildNoAmbulanceSheet(context, activeRequest, assignedHospital, theme, isDark))
-                          : (hasActiveRequest
-                              ? (isDesktop
-                                  ? _buildDesktopActiveTrackingDock(context, activeRequest, assignedHospital, theme, isDark)
-                                  : _buildActiveTrackingSheet(context, activeRequest, assignedHospital, theme, isDark, false))
-                              : (isDesktop
-                                  ? _buildDesktopIdleEmergencyDock(context, theme, isDark)
-                                  : _buildIdleEmergencySheet(context, theme, isDark, false))),
+            child: MouseRegion(
+              onEnter: (_) => OpenFreeMapView.setUIHovered(true),
+              onExit: (_) => OpenFreeMapView.setUIHovered(false),
+              child: SafeArea(
+                top: false,
+                child: Center(
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(maxWidth: isDesktop ? 1440 : 540),
+                    child: Padding(
+                      padding: EdgeInsets.symmetric(horizontal: isDesktop ? 20 : 14),
+                      child: AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 300),
+                        child: isNoAmbulanceAvailable
+                            ? (isDesktop
+                                ? _buildDesktopNoAmbulanceDock(context, activeRequest, assignedHospital, theme, isDark)
+                                : _buildNoAmbulanceSheet(context, activeRequest, assignedHospital, theme, isDark))
+                            : (hasActiveRequest
+                                ? (isDesktop
+                                    ? _buildDesktopActiveTrackingDock(context, activeRequest, assignedHospital, theme, isDark)
+                                    : _buildActiveTrackingSheet(context, activeRequest, assignedHospital, theme, isDark, false))
+                                : (isDesktop
+                                    ? _buildDesktopIdleEmergencyDock(context, theme, isDark)
+                                    : _buildIdleEmergencySheet(context, theme, isDark, false))),
+                      ),
                     ),
                   ),
                 ),
@@ -1336,8 +1341,8 @@ class _HomeScreenState extends State<HomeScreen> {
     NearbyHospital? assignedHospital,
   }) {
     return Container(
-      height: 58,
-      padding: const EdgeInsets.symmetric(horizontal: 16),
+      height: 64,
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
       decoration: BoxDecoration(
         color: isDark ? const Color(0xFF0F172A).withValues(alpha: 0.96) : Colors.white.withValues(alpha: 0.96),
         borderRadius: BorderRadius.circular(24),
@@ -1353,6 +1358,7 @@ class _HomeScreenState extends State<HomeScreen> {
         ],
       ),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           // Branding Icon & Title
           Container(
@@ -1394,70 +1400,34 @@ class _HomeScreenState extends State<HomeScreen> {
 
           const SizedBox(width: 16),
           Container(width: 1, height: 28, color: isDark ? Colors.white12 : Colors.black12),
-          const SizedBox(width: 12),
+          const SizedBox(width: 14),
 
           // Middle Scrollable Section (Style Selector + POI chips)
           Expanded(
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              physics: const BouncingScrollPhysics(),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  MapStyleSelector(
-                    currentStyle: _selectedMapStyle,
-                    isEmbedded: true,
-                    onStyleSelected: (style) {
-                      setState(() => _selectedMapStyle = style);
-                    },
-                  ),
-                  const SizedBox(width: 10),
-                  if (isAmbulanceAssigned) ...[
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF16A34A).withValues(alpha: 0.15),
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(color: const Color(0xFF16A34A), width: 1.2),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Text('🚑', style: TextStyle(fontSize: 13)),
-                          const SizedBox(width: 6),
-                          Text(
-                            'Unit in Focus: ${assignedAmbulanceId ?? "Assigned"}',
-                            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w900, color: Color(0xFF16A34A)),
-                          ),
-                        ],
-                      ),
+            child: ScrollConfiguration(
+              behavior: ScrollConfiguration.of(context).copyWith(
+                scrollbars: false,
+                dragDevices: {
+                  PointerDeviceKind.touch,
+                  PointerDeviceKind.mouse,
+                  PointerDeviceKind.trackpad,
+                },
+              ),
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                physics: const BouncingScrollPhysics(),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    MapStyleSelector(
+                      currentStyle: _selectedMapStyle,
+                      isEmbedded: true,
+                      onStyleSelected: (style) {
+                        setState(() => _selectedMapStyle = style);
+                      },
                     ),
-                    const SizedBox(width: 8),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF0284C7).withValues(alpha: 0.15),
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(color: const Color(0xFF0284C7), width: 1.2),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Text('🏥', style: TextStyle(fontSize: 13)),
-                          const SizedBox(width: 6),
-                          ConstrainedBox(
-                            constraints: const BoxConstraints(maxWidth: 180),
-                            child: Text(
-                              assignedHospital?.name ?? 'Assigned Hospital',
-                              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w900, color: Color(0xFF0284C7)),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ] else ...[
+                    const SizedBox(width: 10),
                     _buildPoiFilterChip(
                       label: '🏥 Hospitals (${hospitals.length})',
                       isSelected: _showHospitals,
@@ -1474,17 +1444,12 @@ class _HomeScreenState extends State<HomeScreen> {
                       onTap: () => setState(() => _showAmbulances = !_showAmbulances),
                     ),
                   ],
-                ],
+                ),
               ),
             ),
           ),
 
           const SizedBox(width: 12),
-
-          // Backend Mode (Live REST/Socket.IO vs Simulation)
-          _buildBackendModePill(isDesktop: true),
-
-          const SizedBox(width: 8),
 
           // History Log (Section 13)
           _buildHistoryButton(isDesktop: true),
@@ -1498,49 +1463,6 @@ class _HomeScreenState extends State<HomeScreen> {
 
           // Night / Dark Mode Toggle
           _buildThemeToggleButton(isDesktop: true),
-
-          const SizedBox(width: 8),
-
-          // DEMO Quick Pill
-          InkWell(
-            onTap: () {
-              Navigator.pushNamed(context, RoutePaths.simulationScenarios);
-            },
-            borderRadius: BorderRadius.circular(20),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
-              decoration: BoxDecoration(
-                color: Colors.amber.shade900.withValues(alpha: 0.15),
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: Colors.amber.shade700, width: 1.2),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Container(
-                    width: 7,
-                    height: 7,
-                    decoration: BoxDecoration(
-                      color: Colors.amber.shade600,
-                      shape: BoxShape.circle,
-                    ),
-                  ),
-                  const SizedBox(width: 6),
-                  Text(
-                    'DEMO',
-                    style: TextStyle(
-                      color: Colors.amber.shade900,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w900,
-                      letterSpacing: 0.5,
-                    ),
-                  ),
-                  const SizedBox(width: 4),
-                  Icon(Icons.tune_rounded, size: 15, color: Colors.amber.shade900),
-                ],
-              ),
-            ),
-          ),
         ],
       ),
     );
@@ -1549,143 +1471,130 @@ class _HomeScreenState extends State<HomeScreen> {
   /// Mobile Options & Controls Drawer Sheet
   void _showMobileMenuSheet(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    OpenFreeMapView.setUIHovered(true);
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (context) {
-        return Material(
-          color: isDark ? const Color(0xFF1E293B) : Colors.white,
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-          clipBehavior: Clip.antiAlias,
-          child: SafeArea(
-            top: false,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Center(
-                    child: Container(
-                      width: 40,
-                      height: 4,
-                      decoration: BoxDecoration(
-                        color: isDark ? Colors.white24 : Colors.black12,
-                        borderRadius: BorderRadius.circular(2),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const Text(
-                        'UyirKappan Controls',
-                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
-                      ),
-                      _buildThemeToggleButton(isDesktop: false),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  // Option 1: Demo Scenarios
-                  ListTile(
-                    leading: Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: Colors.amber.shade900.withValues(alpha: 0.15),
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: Icon(Icons.tune_rounded, color: Colors.amber.shade900, size: 20),
-                    ),
-                    title: const Text('Interactive Demo Scenarios', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 14)),
-                    subtitle: const Text('Normal Dispatch, Fallback, Timeout & No Ambulance', style: TextStyle(fontSize: 11)),
-                    trailing: const Icon(Icons.chevron_right_rounded),
-                    onTap: () {
-                      Navigator.pop(context);
-                      Navigator.pushNamed(context, RoutePaths.simulationScenarios);
-                    },
-                  ),
-                  // Option 2: Bystander Profile & Auth
-                  ListTile(
-                    leading: Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF0284C7).withValues(alpha: 0.15),
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: const Icon(Icons.account_circle_rounded, color: Color(0xFF0284C7), size: 20),
-                    ),
-                    title: const Text('Bystander User Profile', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 14)),
-                    subtitle: const Text('Manage credentials, login, and view JWT Bearer token', style: TextStyle(fontSize: 11)),
-                    trailing: const Icon(Icons.chevron_right_rounded),
-                    onTap: () {
-                      Navigator.pop(context);
-                      _showUserProfileModal(context);
-                    },
-                  ),
-                  // Option 3: Request History
-                  ListTile(
-                    leading: Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF16A34A).withValues(alpha: 0.15),
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: const Icon(Icons.history_rounded, color: Color(0xFF16A34A), size: 20),
-                    ),
-                    title: const Text('Emergency Request History', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 14)),
-                    subtitle: const Text('Inspect previously dispatched and completed emergency requests', style: TextStyle(fontSize: 11)),
-                    trailing: const Icon(Icons.chevron_right_rounded),
-                    onTap: () {
-                      Navigator.pop(context);
-                      _showRequestHistoryModal();
-                    },
-                  ),
-                  const Divider(height: 20),
-                  // Map Vector Style Selector
-                  const Text('Map Vector Style', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 13)),
-                  const SizedBox(height: 8),
-                  MapStyleSelector(
-                    currentStyle: _selectedMapStyle,
-                    onStyleSelected: (style) {
-                      setState(() => _selectedMapStyle = style);
-                      Navigator.pop(context);
-                    },
-                  ),
-                  const SizedBox(height: 12),
-                  // POI Network Filters
-                  Row(
-                    children: [
-                      Expanded(
-                        child: _buildPoiFilterChip(
-                          label: '🏥 Hospitals (${NearbyEmergencyService.fixedHospitals.length})',
-                          isSelected: _showHospitals,
-                          color: const Color(0xFF0284C7),
-                          isDesktop: false,
-                          onTap: () => setState(() => _showHospitals = !_showHospitals),
+        return MouseRegion(
+          onEnter: (_) => OpenFreeMapView.setUIHovered(true),
+          onExit: (_) => OpenFreeMapView.setUIHovered(false),
+          child: Material(
+            color: isDark ? const Color(0xFF1E293B) : Colors.white,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+            clipBehavior: Clip.antiAlias,
+            child: SafeArea(
+              top: false,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Center(
+                      child: Container(
+                        width: 40,
+                        height: 4,
+                        decoration: BoxDecoration(
+                          color: isDark ? Colors.white24 : Colors.black12,
+                          borderRadius: BorderRadius.circular(2),
                         ),
                       ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: _buildPoiFilterChip(
-                          label: '🚑 Standby (${NearbyEmergencyService.fixedAmbulances.length})',
-                          isSelected: _showAmbulances,
-                          color: const Color(0xFF16A34A),
-                          isDesktop: false,
-                          onTap: () => setState(() => _showAmbulances = !_showAmbulances),
+                    ),
+                    const SizedBox(height: 16),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text(
+                          'UyirKappan Controls',
+                          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
                         ),
+                        _buildThemeToggleButton(isDesktop: false),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    // Option 1: Bystander Profile & Auth
+                    ListTile(
+                      leading: Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF0284C7).withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: const Icon(Icons.account_circle_rounded, color: Color(0xFF0284C7), size: 20),
                       ),
-                    ],
-                  ),
-                  const SizedBox(height: 10),
-                ],
+                      title: const Text('Bystander User Profile', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 14)),
+                      subtitle: const Text('Manage credentials, login & account settings', style: TextStyle(fontSize: 11)),
+                      trailing: const Icon(Icons.chevron_right_rounded),
+                      onTap: () {
+                        Navigator.pop(context);
+                        _showUserProfileModal(context);
+                      },
+                    ),
+                    // Option 2: Request History
+                    ListTile(
+                      leading: Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF16A34A).withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: const Icon(Icons.history_rounded, color: Color(0xFF16A34A), size: 20),
+                      ),
+                      title: const Text('Emergency Request History', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 14)),
+                      subtitle: const Text('Inspect previously dispatched emergency requests', style: TextStyle(fontSize: 11)),
+                      trailing: const Icon(Icons.chevron_right_rounded),
+                      onTap: () {
+                        Navigator.pop(context);
+                        _showRequestHistoryModal();
+                      },
+                    ),
+                    const Divider(height: 20),
+                    // Map Vector Style Selector
+                    const Text('Map Vector Style', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 13)),
+                    const SizedBox(height: 8),
+                    MapStyleSelector(
+                      currentStyle: _selectedMapStyle,
+                      onStyleSelected: (style) {
+                        setState(() => _selectedMapStyle = style);
+                        Navigator.pop(context);
+                      },
+                    ),
+                    const SizedBox(height: 12),
+                    // POI Network Filters
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _buildPoiFilterChip(
+                            label: '🏥 Hospitals (${NearbyEmergencyService.fixedHospitals.length})',
+                            isSelected: _showHospitals,
+                            color: const Color(0xFF0284C7),
+                            isDesktop: false,
+                            onTap: () => setState(() => _showHospitals = !_showHospitals),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: _buildPoiFilterChip(
+                            label: '🚑 Standby (${NearbyEmergencyService.fixedAmbulances.length})',
+                            isSelected: _showAmbulances,
+                            color: const Color(0xFF16A34A),
+                            isDesktop: false,
+                            onTap: () => setState(() => _showAmbulances = !_showAmbulances),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                  ],
+                ),
               ),
             ),
           ),
         );
       },
-    );
+    ).whenComplete(() => OpenFreeMapView.setUIHovered(false));
   }
 
   /// Mobile Top Bar (Single-Row Floating Navigation Capsule)
@@ -1761,50 +1670,20 @@ class _HomeScreenState extends State<HomeScreen> {
               ],
             ),
           ),
-          const SizedBox(width: 6),
+          const Spacer(),
 
-          // Backend Mode Pill (Live vs Sim)
-          _buildBackendModePill(isDesktop: false),
-          const SizedBox(width: 5),
-
-          // Quick Demo Scenarios Pill
-          InkWell(
-            onTap: () {
-              Navigator.pushNamed(context, RoutePaths.simulationScenarios);
-            },
-            borderRadius: BorderRadius.circular(14),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
-              decoration: BoxDecoration(
-                color: Colors.amber.shade900.withValues(alpha: 0.15),
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: Colors.amber.shade700, width: 1.1),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Container(
-                    width: 5,
-                    height: 5,
-                    decoration: BoxDecoration(
-                      color: Colors.amber.shade600,
-                      shape: BoxShape.circle,
-                    ),
-                  ),
-                  const SizedBox(width: 4),
-                  Text(
-                    'DEMO',
-                    style: TextStyle(
-                      color: Colors.amber.shade900,
-                      fontSize: 9.5,
-                      fontWeight: FontWeight.w900,
-                      letterSpacing: 0.3,
-                    ),
-                  ),
-                ],
-              ),
-            ),
+          // History Log Button
+          IconButton(
+            onPressed: () => _showRequestHistoryModal(),
+            icon: const Icon(Icons.history_rounded, size: 20),
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+            splashRadius: 18,
+            tooltip: 'Request History',
           ),
+
+          // Night / Dark Mode Toggle
+          _buildThemeToggleButton(isDesktop: false),
           const SizedBox(width: 2),
 
           // Mobile Menu Button (Profile, History, Layers)
@@ -1931,6 +1810,131 @@ class _HomeScreenState extends State<HomeScreen> {
                           isCompact: true,
                         ),
                       ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                // Emergency Scenario Selector Row with Left/Right arrow controls
+                Row(
+                  children: [
+                    Text(
+                      'Scenario:',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: isDark ? Colors.white70 : AppColors.textSecondaryLight,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    InkWell(
+                      onTap: () {
+                        if (_desktopCategoryScrollController.hasClients) {
+                          _desktopCategoryScrollController.animateTo(
+                            math.max(0, _desktopCategoryScrollController.offset - 200),
+                            duration: const Duration(milliseconds: 250),
+                            curve: Curves.easeOut,
+                          );
+                        }
+                      },
+                      borderRadius: BorderRadius.circular(8),
+                      child: Container(
+                        width: 24,
+                        height: 34,
+                        decoration: BoxDecoration(
+                          color: isDark ? Colors.white.withValues(alpha: 0.08) : Colors.black.withValues(alpha: 0.05),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Icon(Icons.chevron_left_rounded, size: 18, color: isDark ? Colors.white70 : Colors.black54),
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    Expanded(
+                      child: SizedBox(
+                        height: 36,
+                        child: ScrollConfiguration(
+                          behavior: ScrollConfiguration.of(context).copyWith(
+                            dragDevices: {
+                              PointerDeviceKind.touch,
+                              PointerDeviceKind.mouse,
+                              PointerDeviceKind.trackpad,
+                            },
+                          ),
+                          child: ListView.builder(
+                            controller: _desktopCategoryScrollController,
+                            scrollDirection: Axis.horizontal,
+                            physics: const BouncingScrollPhysics(),
+                            itemCount: EmergencyType.values.length,
+                            itemBuilder: (context, index) {
+                              final type = EmergencyType.values[index];
+                              final isSelected = type == selectedType;
+                              return Padding(
+                                padding: const EdgeInsets.only(right: 6),
+                                child: InkWell(
+                                  onTap: () => widget.emergencyController.setEmergencyType(type),
+                                  borderRadius: BorderRadius.circular(16),
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                    decoration: BoxDecoration(
+                                      color: isSelected ? AppColors.emergencyRed : (isDark ? const Color(0xFF0F172A) : Colors.grey.shade100),
+                                      borderRadius: BorderRadius.circular(16),
+                                      border: Border.all(
+                                        color: isSelected ? AppColors.emergencyRed : Colors.black.withValues(alpha: 0.12),
+                                        width: 1.2,
+                                      ),
+                                    ),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Icon(type.icon, size: 15, color: isSelected ? Colors.white : AppColors.emergencyRed),
+                                        const SizedBox(width: 5),
+                                        Text(
+                                          type.displayName,
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            fontWeight: isSelected ? FontWeight.w900 : FontWeight.w700,
+                                            color: isSelected ? Colors.white : null,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    InkWell(
+                      onTap: () {
+                        if (_desktopCategoryScrollController.hasClients) {
+                          _desktopCategoryScrollController.animateTo(
+                            _desktopCategoryScrollController.offset + 200,
+                            duration: const Duration(milliseconds: 250),
+                            curve: Curves.easeOut,
+                          );
+                        }
+                      },
+                      borderRadius: BorderRadius.circular(8),
+                      child: Container(
+                        width: 24,
+                        height: 34,
+                        decoration: BoxDecoration(
+                          color: isDark ? Colors.white.withValues(alpha: 0.08) : Colors.black.withValues(alpha: 0.05),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Icon(Icons.chevron_right_rounded, size: 18, color: isDark ? Colors.white70 : Colors.black54),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    CounterStepper(
+                      count: widget.emergencyController.victimCount,
+                      min: AppConstants.minVictims,
+                      max: AppConstants.maxVictims,
+                      isCompact: true,
+                      onIncrement: widget.emergencyController.incrementVictimCount,
+                      onDecrement: widget.emergencyController.decrementVictimCount,
                     ),
                   ],
                 ),
@@ -2129,7 +2133,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   children: [
                     Flexible(
                       child: Text(
-                        'Select Emergency Scenario:',
+                        'Select Emergency Category:',
                         style: TextStyle(
                           fontSize: 12.5,
                           fontWeight: FontWeight.w700,
@@ -2164,54 +2168,125 @@ class _HomeScreenState extends State<HomeScreen> {
                 const SizedBox(height: 8),
                 SizedBox(
                   height: 44,
-                  child: ListView.builder(
-                    scrollDirection: Axis.horizontal,
-                    itemCount: EmergencyType.values.length,
-                    itemBuilder: (context, index) {
-                      final type = EmergencyType.values[index];
-                      final isSelected = type == selectedType;
-
-                      return Padding(
-                        padding: const EdgeInsets.only(right: 8),
-                        child: InkWell(
-                          onTap: () => widget.emergencyController.setEmergencyType(type),
-                          borderRadius: BorderRadius.circular(18),
-                          child: AnimatedContainer(
-                            duration: const Duration(milliseconds: 180),
-                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                            decoration: BoxDecoration(
-                              color: isSelected
-                                  ? AppColors.emergencyRed
-                                  : (isDark ? const Color(0xFF0F172A) : Colors.grey.shade100),
-                              borderRadius: BorderRadius.circular(18),
-                              border: Border.all(
-                                color: isSelected ? AppColors.emergencyRed : Colors.black.withValues(alpha: 0.12),
-                                width: 1.3,
-                              ),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(
-                                  type.icon,
-                                  size: 18,
-                                  color: isSelected ? Colors.white : AppColors.emergencyRed,
-                                ),
-                                const SizedBox(width: 6),
-                                Text(
-                                  type.displayName,
-                                  style: TextStyle(
-                                    fontSize: 13,
-                                    fontWeight: isSelected ? FontWeight.w900 : FontWeight.w700,
-                                    color: isSelected ? Colors.white : null,
-                                  ),
-                                ),
-                              ],
-                            ),
+                  child: Row(
+                    children: [
+                      // Left scroll arrow button
+                      InkWell(
+                        onTap: () {
+                          if (_desktopCategoryScrollController.hasClients) {
+                            _desktopCategoryScrollController.animateTo(
+                              math.max(0, _desktopCategoryScrollController.offset - 220),
+                              duration: const Duration(milliseconds: 250),
+                              curve: Curves.easeOut,
+                            );
+                          }
+                        },
+                        borderRadius: BorderRadius.circular(12),
+                        child: Container(
+                          width: 26,
+                          height: 38,
+                          decoration: BoxDecoration(
+                            color: isDark ? Colors.white.withValues(alpha: 0.08) : Colors.black.withValues(alpha: 0.05),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Icon(
+                            Icons.chevron_left_rounded,
+                            size: 20,
+                            color: isDark ? Colors.white70 : Colors.black54,
                           ),
                         ),
-                      );
-                    },
+                      ),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: ScrollConfiguration(
+                          behavior: ScrollConfiguration.of(context).copyWith(
+                            dragDevices: {
+                              PointerDeviceKind.touch,
+                              PointerDeviceKind.mouse,
+                              PointerDeviceKind.trackpad,
+                            },
+                          ),
+                          child: ListView.builder(
+                            controller: _desktopCategoryScrollController,
+                            scrollDirection: Axis.horizontal,
+                            physics: const BouncingScrollPhysics(),
+                            itemCount: EmergencyType.values.length,
+                            itemBuilder: (context, index) {
+                              final type = EmergencyType.values[index];
+                              final isSelected = type == selectedType;
+
+                              return Padding(
+                                padding: const EdgeInsets.only(right: 8),
+                                child: InkWell(
+                                  onTap: () => widget.emergencyController.setEmergencyType(type),
+                                  borderRadius: BorderRadius.circular(18),
+                                  child: AnimatedContainer(
+                                    duration: const Duration(milliseconds: 180),
+                                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                                    decoration: BoxDecoration(
+                                      color: isSelected
+                                          ? AppColors.emergencyRed
+                                          : (isDark ? const Color(0xFF0F172A) : Colors.grey.shade100),
+                                      borderRadius: BorderRadius.circular(18),
+                                      border: Border.all(
+                                        color: isSelected ? AppColors.emergencyRed : Colors.black.withValues(alpha: 0.12),
+                                        width: 1.3,
+                                      ),
+                                    ),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Icon(
+                                          type.icon,
+                                          size: 18,
+                                          color: isSelected ? Colors.white : AppColors.emergencyRed,
+                                        ),
+                                        const SizedBox(width: 6),
+                                        Text(
+                                          type.displayName,
+                                          style: TextStyle(
+                                            fontSize: 13,
+                                            fontWeight: isSelected ? FontWeight.w900 : FontWeight.w700,
+                                            color: isSelected ? Colors.white : null,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      // Right scroll arrow button
+                      InkWell(
+                        onTap: () {
+                          if (_desktopCategoryScrollController.hasClients) {
+                            _desktopCategoryScrollController.animateTo(
+                              _desktopCategoryScrollController.offset + 220,
+                              duration: const Duration(milliseconds: 250),
+                              curve: Curves.easeOut,
+                            );
+                          }
+                        },
+                        borderRadius: BorderRadius.circular(12),
+                        child: Container(
+                          width: 26,
+                          height: 38,
+                          decoration: BoxDecoration(
+                            color: isDark ? Colors.white.withValues(alpha: 0.08) : Colors.black.withValues(alpha: 0.05),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Icon(
+                            Icons.chevron_right_rounded,
+                            size: 20,
+                            color: isDark ? Colors.white70 : Colors.black54,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ],
@@ -2255,9 +2330,7 @@ class _HomeScreenState extends State<HomeScreen> {
   ) {
     final status = request.status;
     final isFallbackActive = request.fallbackCount > 0 && status == RequestStatus.searching;
-    final etaMinutes = _currentTelemetry?.eta?.estimatedMinutes ?? request.currentETA ?? 5;
-    final etaFormatted = 'ETA: $etaMinutes minutes';
-    final ambulanceId = _currentTelemetry?.ambulanceId ?? request.assignedAmbulanceId ?? 'AMB-CH-042';
+    final ambulanceId = request.assignedAmbulanceId ?? 'AMB-TN-01-108';
 
     return Container(
       key: const ValueKey('desktop_active_tracking_dock'),
@@ -2295,16 +2368,16 @@ class _HomeScreenState extends State<HomeScreen> {
                         color: AppColors.emergencyRed,
                         borderRadius: BorderRadius.circular(12),
                       ),
-                      child: Row(
+                      child: const Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          const Icon(Icons.timer_rounded, color: Colors.white, size: 15),
-                          const SizedBox(width: 5),
+                          Icon(Icons.emergency_rounded, color: Colors.white, size: 15),
+                          SizedBox(width: 5),
                           Text(
-                            etaFormatted,
-                            style: const TextStyle(
+                            'EMERGENCY ACTIVE',
+                            style: TextStyle(
                               color: Colors.white,
-                              fontSize: 12,
+                              fontSize: 11.5,
                               fontWeight: FontWeight.w900,
                               letterSpacing: 0.3,
                             ),
@@ -2415,23 +2488,23 @@ class _HomeScreenState extends State<HomeScreen> {
           // Widescreen Single-Tier Cockpit Dock (Zero Overlap & Proportional Flex)
           return Row(
             children: [
-              // ETA Capsule
+              // Active Emergency Capsule
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                 decoration: BoxDecoration(
                   color: AppColors.emergencyRed,
                   borderRadius: BorderRadius.circular(14),
                 ),
-                child: Row(
+                child: const Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Icon(Icons.timer_rounded, color: Colors.white, size: 16),
-                    const SizedBox(width: 6),
+                    Icon(Icons.emergency_rounded, color: Colors.white, size: 16),
+                    SizedBox(width: 6),
                     Text(
-                      etaFormatted,
-                      style: const TextStyle(
+                      'ACTIVE EMERGENCY',
+                      style: TextStyle(
                         color: Colors.white,
-                        fontSize: 13,
+                        fontSize: 12.5,
                         fontWeight: FontWeight.w900,
                         letterSpacing: 0.3,
                       ),
@@ -2545,6 +2618,26 @@ class _HomeScreenState extends State<HomeScreen> {
               const SizedBox(width: 12),
               const Spacer(),
 
+              // Emergency Details Button
+              SizedBox(
+                height: 40,
+                child: OutlinedButton.icon(
+                  onPressed: () => _showRequestDetailDialog(context, request),
+                  icon: const Icon(Icons.info_outline_rounded, size: 15, color: Color(0xFF2563EB)),
+                  label: const Text(
+                    'DETAILS',
+                    style: TextStyle(fontWeight: FontWeight.w900, fontSize: 11, color: Color(0xFF2563EB)),
+                  ),
+                  style: OutlinedButton.styleFrom(
+                    side: const BorderSide(color: Color(0xFF2563EB), width: 1.2),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    padding: const EdgeInsets.symmetric(horizontal: 14),
+                  ),
+                ),
+              ),
+
+              const SizedBox(width: 10),
+
               // Cancel Emergency Button
               SizedBox(
                 height: 40,
@@ -2587,8 +2680,7 @@ class _HomeScreenState extends State<HomeScreen> {
   ]) {
     final status = request.status;
     final isFallbackActive = request.fallbackCount > 0 && status == RequestStatus.searching;
-    final etaMinutes = _currentTelemetry?.eta?.estimatedMinutes ?? request.currentETA ?? 5;
-    final ambulanceId = _currentTelemetry?.ambulanceId ?? request.assignedAmbulanceId ?? 'AMB-CH-042';
+    final ambulanceId = request.assignedAmbulanceId ?? 'AMB-TN-01-108';
 
     return Container(
       key: const ValueKey('active_tracking_sheet'),
@@ -2633,11 +2725,11 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ],
 
-          // ETA & Status Header Row (Bounded flex row with zero overflow)
+          // Status Header Row (Bounded flex row with zero overflow)
           Row(
             children: [
               Container(
-                padding: EdgeInsets.symmetric(horizontal: isDesktop ? 12 : 9, vertical: isDesktop ? 6 : 5),
+                padding: EdgeInsets.symmetric(horizontal: isDesktop ? 12 : 8, vertical: isDesktop ? 6 : 4),
                 decoration: BoxDecoration(
                   color: AppColors.emergencyRed,
                   borderRadius: BorderRadius.circular(12),
@@ -2645,13 +2737,13 @@ class _HomeScreenState extends State<HomeScreen> {
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(Icons.timer_rounded, color: Colors.white, size: isDesktop ? 16 : 14),
+                    Icon(Icons.emergency_rounded, color: Colors.white, size: isDesktop ? 16 : 13),
                     const SizedBox(width: 4),
                     Text(
-                      'ETA: $etaMinutes min',
+                      isDesktop ? 'ACTIVE EMERGENCY' : 'ACTIVE',
                       style: TextStyle(
                         color: Colors.white,
-                        fontSize: isDesktop ? 13 : 11.5,
+                        fontSize: isDesktop ? 13 : 11,
                         fontWeight: FontWeight.w900,
                         letterSpacing: 0.3,
                       ),
@@ -3372,60 +3464,121 @@ class _HomeScreenState extends State<HomeScreen> {
 
           const SizedBox(height: 10),
 
-          // Emergency Category Selection Pills (Horizontal Scroll)
+          // Emergency Category Selection Pills (Horizontal Scroll with arrows)
           SizedBox(
             height: isDesktop ? 56 : 38,
-            child: ListView.builder(
-              scrollDirection: Axis.horizontal,
-              itemCount: EmergencyType.values.length,
-              itemBuilder: (context, index) {
-                final type = EmergencyType.values[index];
-                final isSelected = type == selectedType;
+            child: Row(
+              children: [
+                InkWell(
+                  onTap: () {
+                    if (_mobileCategoryScrollController.hasClients) {
+                      _mobileCategoryScrollController.animateTo(
+                        math.max(0, _mobileCategoryScrollController.offset - 200),
+                        duration: const Duration(milliseconds: 250),
+                        curve: Curves.easeOut,
+                      );
+                    }
+                  },
+                  borderRadius: BorderRadius.circular(8),
+                  child: Container(
+                    width: 24,
+                    height: isDesktop ? 48 : 34,
+                    decoration: BoxDecoration(
+                      color: isDark ? Colors.white.withValues(alpha: 0.08) : Colors.black.withValues(alpha: 0.05),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Icon(Icons.chevron_left_rounded, size: 18, color: isDark ? Colors.white70 : Colors.black54),
+                  ),
+                ),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: ScrollConfiguration(
+                    behavior: ScrollConfiguration.of(context).copyWith(
+                      dragDevices: {
+                        PointerDeviceKind.touch,
+                        PointerDeviceKind.mouse,
+                        PointerDeviceKind.trackpad,
+                      },
+                    ),
+                    child: ListView.builder(
+                      controller: _mobileCategoryScrollController,
+                      scrollDirection: Axis.horizontal,
+                      physics: const BouncingScrollPhysics(),
+                      itemCount: EmergencyType.values.length,
+                      itemBuilder: (context, index) {
+                        final type = EmergencyType.values[index];
+                        final isSelected = type == selectedType;
 
-                return Padding(
-                  padding: const EdgeInsets.only(right: 7),
-                  child: InkWell(
-                    onTap: () => widget.emergencyController.setEmergencyType(type),
-                    borderRadius: BorderRadius.circular(20),
-                    child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 180),
-                      padding: EdgeInsets.symmetric(
-                        horizontal: isDesktop ? 18 : 12,
-                        vertical: isDesktop ? 12 : 7,
-                      ),
-                      decoration: BoxDecoration(
-                        color: isSelected
-                            ? AppColors.emergencyRed
-                            : (isDark ? const Color(0xFF0F172A) : Colors.grey.shade100),
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(
-                          color: isSelected ? AppColors.emergencyRed : Colors.black.withValues(alpha: 0.12),
-                          width: 1.3,
-                        ),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            type.icon,
-                            size: isDesktop ? 24 : 17,
-                            color: isSelected ? Colors.white : AppColors.emergencyRed,
-                          ),
-                          const SizedBox(width: 6),
-                          Text(
-                            type.displayName,
-                            style: TextStyle(
-                              fontSize: isDesktop ? 15 : 12.5,
-                              fontWeight: isSelected ? FontWeight.w900 : FontWeight.w700,
-                              color: isSelected ? Colors.white : null,
+                        return Padding(
+                          padding: const EdgeInsets.only(right: 7),
+                          child: InkWell(
+                            onTap: () => widget.emergencyController.setEmergencyType(type),
+                            borderRadius: BorderRadius.circular(20),
+                            child: AnimatedContainer(
+                              duration: const Duration(milliseconds: 180),
+                              padding: EdgeInsets.symmetric(
+                                horizontal: isDesktop ? 18 : 12,
+                                vertical: isDesktop ? 12 : 7,
+                              ),
+                              decoration: BoxDecoration(
+                                color: isSelected
+                                    ? AppColors.emergencyRed
+                                    : (isDark ? const Color(0xFF0F172A) : Colors.grey.shade100),
+                                borderRadius: BorderRadius.circular(20),
+                                border: Border.all(
+                                  color: isSelected ? AppColors.emergencyRed : Colors.black.withValues(alpha: 0.12),
+                                  width: 1.3,
+                                ),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    type.icon,
+                                    size: isDesktop ? 24 : 17,
+                                    color: isSelected ? Colors.white : AppColors.emergencyRed,
+                                  ),
+                                  const SizedBox(width: 6),
+                                  Text(
+                                    type.displayName,
+                                    style: TextStyle(
+                                      fontSize: isDesktop ? 15 : 12.5,
+                                      fontWeight: isSelected ? FontWeight.w900 : FontWeight.w700,
+                                      color: isSelected ? Colors.white : null,
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ),
                           ),
-                        ],
-                      ),
+                        );
+                      },
                     ),
                   ),
-                );
-              },
+                ),
+                const SizedBox(width: 4),
+                InkWell(
+                  onTap: () {
+                    if (_mobileCategoryScrollController.hasClients) {
+                      _mobileCategoryScrollController.animateTo(
+                        _mobileCategoryScrollController.offset + 200,
+                        duration: const Duration(milliseconds: 250),
+                        curve: Curves.easeOut,
+                      );
+                    }
+                  },
+                  borderRadius: BorderRadius.circular(8),
+                  child: Container(
+                    width: 24,
+                    height: isDesktop ? 48 : 34,
+                    decoration: BoxDecoration(
+                      color: isDark ? Colors.white.withValues(alpha: 0.08) : Colors.black.withValues(alpha: 0.05),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Icon(Icons.chevron_right_rounded, size: 18, color: isDark ? Colors.white70 : Colors.black54),
+                  ),
+                ),
+              ],
             ),
           ),
 

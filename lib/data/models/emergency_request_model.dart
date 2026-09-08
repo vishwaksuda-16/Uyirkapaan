@@ -23,6 +23,7 @@ class EmergencyRequestModel extends EmergencyRequest {
     super.additionalNotes,
     super.fallbackCount,
     super.currentETA,
+    super.attemptsHistory = const [],
     super.t0UserPressed,
     super.t1RequestReceived,
     super.t2MatchingCompleted,
@@ -68,6 +69,15 @@ class EmergencyRequestModel extends EmergencyRequest {
     final fallbackAttempts = (json['attempts'] as num?)?.toInt() ?? json['fallbackCount'] as int? ?? 0;
     final etaVal = (json['currentETA'] as num?)?.toInt() ?? (json['eta'] as num?)?.toInt();
 
+    final attemptsList = <AssignmentAttempt>[];
+    if (json['attemptsHistory'] is List) {
+      for (final a in json['attemptsHistory'] as List) {
+        if (a is Map<String, dynamic>) {
+          attemptsList.add(AssignmentAttempt.fromJson(a));
+        }
+      }
+    }
+
     return EmergencyRequestModel(
       requestId: json['requestId'] as String? ?? json['id'] as String? ?? 'UK-${DateTime.now().millisecondsSinceEpoch}',
       requesterId: json['requesterId'] as String? ?? 'anonymous',
@@ -89,6 +99,7 @@ class EmergencyRequestModel extends EmergencyRequest {
       additionalNotes: json['additionalNotes'] as String?,
       fallbackCount: fallbackAttempts,
       currentETA: etaVal,
+      attemptsHistory: attemptsList,
       t0UserPressed: json['t0UserPressed'] != null ? DateTime.parse(json['t0UserPressed'] as String) : null,
       t1RequestReceived: json['t1RequestReceived'] != null ? DateTime.parse(json['t1RequestReceived'] as String) : null,
       t2MatchingCompleted: json['t2MatchingCompleted'] != null ? DateTime.parse(json['t2MatchingCompleted'] as String) : null,
@@ -117,6 +128,7 @@ class EmergencyRequestModel extends EmergencyRequest {
       additionalNotes: entity.additionalNotes,
       fallbackCount: entity.fallbackCount,
       currentETA: entity.currentETA,
+      attemptsHistory: entity.attemptsHistory,
       t0UserPressed: entity.t0UserPressed,
       t1RequestReceived: entity.t1RequestReceived,
       t2MatchingCompleted: entity.t2MatchingCompleted,
@@ -145,6 +157,7 @@ class EmergencyRequestModel extends EmergencyRequest {
     String? additionalNotes,
     int? fallbackCount,
     int? currentETA,
+    List<AssignmentAttempt>? attemptsHistory,
     DateTime? t0UserPressed,
     DateTime? t1RequestReceived,
     DateTime? t2MatchingCompleted,
@@ -170,6 +183,7 @@ class EmergencyRequestModel extends EmergencyRequest {
       additionalNotes: additionalNotes ?? this.additionalNotes,
       fallbackCount: fallbackCount ?? this.fallbackCount,
       currentETA: currentETA ?? this.currentETA,
+      attemptsHistory: attemptsHistory ?? this.attemptsHistory,
       t0UserPressed: t0UserPressed ?? this.t0UserPressed,
       t1RequestReceived: t1RequestReceived ?? this.t1RequestReceived,
       t2MatchingCompleted: t2MatchingCompleted ?? this.t2MatchingCompleted,
@@ -203,6 +217,8 @@ class EmergencyRequestModel extends EmergencyRequest {
       'fallbackCount': fallbackCount,
       'attempts': fallbackCount,
       if (currentETA != null) 'currentETA': currentETA,
+      if (attemptsHistory.isNotEmpty)
+        'attemptsHistory': attemptsHistory.map((a) => a.toJson()).toList(),
       if (t0UserPressed != null) 't0UserPressed': t0UserPressed!.toIso8601String(),
       if (t1RequestReceived != null) 't1RequestReceived': t1RequestReceived!.toIso8601String(),
       if (t2MatchingCompleted != null) 't2MatchingCompleted': t2MatchingCompleted!.toIso8601String(),

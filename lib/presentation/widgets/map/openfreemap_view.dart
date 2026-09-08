@@ -7,6 +7,7 @@ import 'openfreemap_view_stub.dart'
 
 /// Cross-platform OpenFreeMap + MapLibre GL map component for UyirKappan.
 class OpenFreeMapView extends StatelessWidget {
+  final LocationData? userLocation;
   final LocationData? incidentLocation;
   final LocationData? ambulanceLocation;
   final double? heading;
@@ -22,6 +23,7 @@ class OpenFreeMapView extends StatelessWidget {
 
   const OpenFreeMapView({
     super.key,
+    this.userLocation,
     this.incidentLocation,
     this.ambulanceLocation,
     this.heading,
@@ -40,9 +42,14 @@ class OpenFreeMapView extends StatelessWidget {
     platform_map.PlatformOpenFreeMapView.suppressClicks(ms);
   }
 
+  static void setUIHovered(bool hovered) {
+    platform_map.PlatformOpenFreeMapView.setUIHovered(hovered);
+  }
+
   @override
   Widget build(BuildContext context) {
     return platform_map.PlatformOpenFreeMapView(
+      userLocation: userLocation,
       incidentLocation: incidentLocation,
       ambulanceLocation: ambulanceLocation,
       heading: heading,

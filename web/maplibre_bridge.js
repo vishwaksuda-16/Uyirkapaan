@@ -11,18 +11,16 @@ window.uyirkappanMaps = window.uyirkappanMaps || {};
   const overlayState = {};
   const registeredContainers = {};
   const pendingInits = {};
-  const pendingRoutes = {};
   const resizeObservers = {};
   const pickerCallbacks = {};
 
   function getState(id) {
     if (!overlayState[id]) {
       overlayState[id] = {
+        userLocation: null,
         incident: null,
-        ambulance: null,
         hospitals: [],
         nearbyAmbulances: [],
-        route: null,
         radar: false,
         enable3D: false
       };
@@ -44,6 +42,51 @@ window.uyirkappanMaps = window.uyirkappanMaps || {};
   window.uyirkappanMaps.setPickerCallback = function (id, cb) {
     pickerCallbacks[id] = cb;
   };
+
+  let globalUIHovered = false;
+
+  window.uyirkappanMaps.setUIHovered = function (hovered) {
+    globalUIHovered = !!hovered;
+    Object.keys(maps).forEach(function (id) {
+      const map = maps[id];
+      if (map) {
+        try {
+          if (globalUIHovered) {
+            map.scrollZoom.disable();
+            map.dragPan.disable();
+            map.touchZoomRotate.disable();
+          } else {
+            map.scrollZoom.enable();
+            map.dragPan.enable();
+            map.touchZoomRotate.enable();
+          }
+        } catch (e) {}
+      }
+    });
+  };
+
+  function isModalOrUIOpen() {
+    if (globalUIHovered) return true;
+    try {
+      const dialog = document.querySelector('[role="dialog"], [aria-modal="true"], .uk-modal, .uk-dialog, .flt-glass-pane [role="dialog"]');
+      if (dialog) return true;
+    } catch (e) {}
+    return false;
+  }
+
+  function isEventInUIZone(e) {
+    if (globalUIHovered || isModalOrUIOpen()) return true;
+    const clientY = e.clientY != null ? e.clientY : (e.touches && e.touches[0] ? e.touches[0].clientY : null);
+    if (clientY == null) return false;
+    const screenH = window.innerHeight;
+    const screenW = window.innerWidth;
+    const isDesktop = screenW >= 1000;
+
+    const topZone = isDesktop ? 95 : 170;
+    const bottomZone = screenH - (isDesktop ? 160 : 250);
+
+    return (clientY <= topZone || clientY >= bottomZone);
+  }
 
   window.uyirkappanMaps.suppressClicks = function (containerId, durationMs) {
     const s = getState(containerId);
@@ -138,6 +181,9 @@ window.uyirkappanMaps = window.uyirkappanMaps || {};
 
   function restoreOverlays(containerId) {
     const state = getState(containerId);
+    if (state.userLocation) {
+      window.uyirkappanMaps.updateUserLocationMarker(containerId, state.userLocation.lat, state.userLocation.lng);
+    }
     if (state.incident) {
       window.uyirkappanMaps.updateIncidentMarker(containerId, state.incident.lat, state.incident.lng, state.incident.isManual);
     }
@@ -260,36 +306,33 @@ window.uyirkappanMaps = window.uyirkappanMaps || {};
         }
         window.uyirkappanMaps.updateIncidentMarker(containerId, lat, lng);
 
+        const canvasContainer = map.getCanvasContainer ? map.getCanvasContainer() : container;
+        // Strictly prevent mouse-wheel zoom bleed into MapLibre when hovering UI zones or modals
+        canvasContainer.addEventListener('wheel', function (e) {
+          if (globalUIHovered || isEventInUIZone(e) || isModalOrUIOpen()) {
+            e.preventDefault();
+            e.stopPropagation();
+          }
+        }, { capture: true, passive: false });
 
         map.on('click', function (e) {
           const s = getState(containerId);
-          if (!s.isPickerMode || s.clickSuppressed) return;
+          if (s.clickSuppressed) return;
 
           if (e.originalEvent) {
             const orig = e.originalEvent;
             if (orig.defaultPrevented) return;
 
-            // Reject clicks originating from buttons, markers, controls, popups, or links
+            // Reject clicks originating from buttons, controls, popups, or other markers
             const target = orig.target;
             if (target && target.closest) {
-              if (target.closest('button, a, input, select, .maplibregl-ctrl, .uk-incident-marker, .uk-hospital-marker, .uk-ambulance-marker, .uk-poi-callout, .maplibregl-popup')) {
+              if (target.closest('button, a, input, select, .maplibregl-ctrl, .uk-hospital-marker, .uk-standby-ambulance-marker, .uk-ambulance-marker, .maplibregl-popup')) {
                 return;
               }
             }
-
-            // Reject clicks landing in the top navbar or bottom dock screen regions
-            const clientY = orig.clientY;
-            const screenH = window.innerHeight;
-            const screenW = window.innerWidth;
-            const isDesktop = screenW >= 1000;
-
-            const topZone = isDesktop ? 95 : 180;
-            const bottomZone = screenH - (isDesktop ? 150 : 220);
-
-            if (clientY <= topZone || clientY >= bottomZone) {
-              return;
-            }
           }
+
+          if (!s.isPickerMode) return;
 
           const clickLat = e.lngLat.lat;
           const clickLng = e.lngLat.lng;
@@ -305,11 +348,6 @@ window.uyirkappanMaps = window.uyirkappanMaps || {};
           });
           window.dispatchEvent(event);
         });
-
-        if (pendingRoutes[containerId]) {
-          window.uyirkappanMaps.drawRoute(containerId, pendingRoutes[containerId]);
-          delete pendingRoutes[containerId];
-        }
 
         restoreOverlays(containerId);
       });
@@ -343,6 +381,55 @@ window.uyirkappanMaps = window.uyirkappanMaps || {};
     }
   };
 
+  function checkMarkerOverlap(containerId) {
+    const s = getState(containerId);
+    if (!s || !markers[containerId]) return;
+    const m = markers[containerId];
+    if (m.userLocation && m.incident) {
+      const uLoc = s.userLocation;
+      const iLoc = s.incident;
+      if (uLoc && iLoc) {
+        const dLat = Math.abs(uLoc.lat - iLoc.lat);
+        const dLng = Math.abs(uLoc.lng - iLoc.lng);
+        // If within ~15 meters and not explicitly manual, hide the blue callout
+        const isNear = dLat < 0.00015 && dLng < 0.00015;
+        const uEl = m.userLocation.getElement();
+        if (uEl) {
+          const uCallout = uEl.querySelector('.uk-user-location-callout');
+          if (uCallout) {
+            uCallout.style.display = (isNear && !iLoc.isManual) ? 'none' : '';
+          }
+        }
+      }
+    }
+  }
+
+  window.uyirkappanMaps.updateUserLocationMarker = function (containerId, lat, lng) {
+    const map = maps[containerId];
+    getState(containerId).userLocation = { lat: lat, lng: lng };
+    if (!map) return;
+
+    if (!markers[containerId]) markers[containerId] = {};
+
+    if (markers[containerId].userLocation) {
+      markers[containerId].userLocation.setLngLat([lng, lat]);
+    } else {
+      const el = document.createElement('div');
+      el.className = 'uk-user-location-marker';
+      el.innerHTML =
+        '<div class="uk-user-location-callout">📍 YOU ARE HERE</div>' +
+        '<div class="uk-user-location-pulse"></div>' +
+        '<div class="uk-user-location-dot"></div>';
+
+      const marker = new maplibregl.Marker({ element: el, anchor: 'center' })
+        .setLngLat([lng, lat])
+        .addTo(map);
+
+      markers[containerId].userLocation = marker;
+    }
+    checkMarkerOverlap(containerId);
+  };
+
   window.uyirkappanMaps.updateIncidentMarker = function (containerId, lat, lng, isManual) {
     const map = maps[containerId];
     getState(containerId).incident = { lat: lat, lng: lng, isManual: !!isManual };
@@ -351,7 +438,7 @@ window.uyirkappanMaps = window.uyirkappanMaps || {};
     if (!markers[containerId]) markers[containerId] = {};
 
     const isPicker = !!getState(containerId).isPickerMode;
-    const calloutText = isManual ? '🚨 INCIDENT PINPOINT' : '📍 YOU ARE HERE';
+    const calloutText = isManual ? '🚨 INCIDENT PINPOINT' : '🚨 EMERGENCY LOCATION';
 
     if (markers[containerId].incident) {
       markers[containerId].incident.setLngLat([lng, lat]);
@@ -390,6 +477,8 @@ window.uyirkappanMaps = window.uyirkappanMaps || {};
         const callout = root.querySelector('.uk-incident-callout');
         if (callout) callout.textContent = '🚨 INCIDENT PINPOINT';
 
+        checkMarkerOverlap(containerId);
+
         const cb = pickerCallbacks[containerId];
         if (typeof cb === 'function') {
           try { cb(dragLat, dragLng); } catch (err) {}
@@ -403,6 +492,7 @@ window.uyirkappanMaps = window.uyirkappanMaps || {};
 
       markers[containerId].incident = marker;
     }
+    checkMarkerOverlap(containerId);
   };
 
   window.uyirkappanMaps.setNearbyHospitals = function (containerId, hospitals) {
@@ -493,15 +583,196 @@ window.uyirkappanMaps = window.uyirkappanMaps || {};
     });
   };
 
-  window.uyirkappanMaps.updateAmbulanceMarker = function (containerId, lat, lng, headingDegrees, ambulanceId) {
-    const map = maps[containerId];
-    getState(containerId).ambulance = {
-      lat: lat,
-      lng: lng,
-      heading: headingDegrees,
-      id: ambulanceId
+  function renderAmbulanceSvg() {
+    return '<svg class="uk-ambulance-svg" width="28" height="48" viewBox="0 0 28 48" fill="none" xmlns="http://www.w3.org/2000/svg">' +
+      '<rect x="2.5" y="1.5" width="23" height="45" rx="6" fill="#FFFFFF" stroke="#DC2626" stroke-width="2"/>' +
+      '<path d="M5 11 Q14 7 23 11 L23 16 Q14 14 5 16 Z" fill="#1E293B"/>' +
+      '<rect x="4" y="2" width="4" height="2.5" rx="1" fill="#FEF08A"/>' +
+      '<rect x="20" y="2" width="4" height="2.5" rx="1" fill="#FEF08A"/>' +
+      '<rect x="5.5" y="19" width="7" height="3.5" rx="1" fill="#EF4444"/>' +
+      '<rect x="15.5" y="19" width="7" height="3.5" rx="1" fill="#3B82F6"/>' +
+      '<rect x="12.5" y="25" width="3" height="10" rx="0.8" fill="#DC2626"/>' +
+      '<rect x="9" y="28.5" width="10" height="3" rx="0.8" fill="#DC2626"/>' +
+      '<rect x="5" y="43" width="18" height="2" fill="#DC2626"/>' +
+      '</svg>';
+  }
+
+  function degToRad(deg) {
+    return deg * (Math.PI / 180);
+  }
+
+  function radToDeg(rad) {
+    return rad * (180 / Math.PI);
+  }
+
+  function distanceMeters(coord1, coord2) {
+    const R = 6371000;
+    const lat1 = degToRad(coord1[1]);
+    const lat2 = degToRad(coord2[1]);
+    const dLat = degToRad(coord2[1] - coord1[1]);
+    const dLng = degToRad(coord2[0] - coord1[0]);
+    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+              Math.cos(lat1) * Math.cos(lat2) *
+              Math.sin(dLng / 2) * Math.sin(dLng / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+  }
+
+  function calculateBearing(coord1, coord2) {
+    const dLng = coord2[0] - coord1[0];
+    const dLat = coord2[1] - coord1[1];
+    if (Math.abs(dLng) < 1e-7 && Math.abs(dLat) < 1e-7) {
+      return 0;
+    }
+    const avgLat = degToRad((coord1[1] + coord2[1]) / 2);
+    const dLngScaled = dLng * Math.cos(avgLat);
+    const rad = Math.atan2(dLngScaled, dLat);
+    return (radToDeg(rad) + 360) % 360;
+  }
+
+  function compileRouteData(coordinates) {
+    if (!coordinates || !Array.isArray(coordinates) || coordinates.length < 2) {
+      return null;
+    }
+    const coords = coordinates;
+    const n = coords.length;
+    const segDistances = new Array(n - 1);
+    const cumulativeDistances = new Array(n);
+    const segmentBearings = new Array(n - 1);
+    cumulativeDistances[0] = 0;
+    let totalDist = 0;
+
+    for (let i = 0; i < n - 1; i++) {
+      const d = distanceMeters(coords[i], coords[i + 1]);
+      segDistances[i] = d;
+      totalDist += d;
+      cumulativeDistances[i + 1] = totalDist;
+      segmentBearings[i] = calculateBearing(coords[i], coords[i + 1]);
+    }
+
+    return {
+      coords: coords,
+      segDistances: segDistances,
+      cumulativeDistances: cumulativeDistances,
+      segmentBearings: segmentBearings,
+      totalDistance: totalDist
     };
+  }
+
+  function getRoutePointAtDistance(routeData, targetDist) {
+    const coords = routeData.coords;
+    const cum = routeData.cumulativeDistances;
+    const n = coords.length;
+    const total = routeData.totalDistance;
+
+    if (targetDist <= 0) {
+      return {
+        lngLat: [coords[0][0], coords[0][1]],
+        bearing: routeData.segmentBearings[0] || 0
+      };
+    }
+    if (targetDist >= total) {
+      return {
+        lngLat: [coords[n - 1][0], coords[n - 1][1]],
+        bearing: routeData.segmentBearings[n - 2] || 0
+      };
+    }
+
+    // Binary search for segment index i: cum[i] <= targetDist < cum[i+1]
+    let low = 0;
+    let high = n - 2;
+    let segIdx = 0;
+    while (low <= high) {
+      const mid = (low + high) >> 1;
+      if (cum[mid] <= targetDist) {
+        segIdx = mid;
+        low = mid + 1;
+      } else {
+        high = mid - 1;
+      }
+    }
+
+    const segLen = routeData.segDistances[segIdx];
+    const distIntoSeg = targetDist - cum[segIdx];
+    const t = segLen > 0 ? Math.max(0, Math.min(1, distIntoSeg / segLen)) : 0;
+
+    const p1 = coords[segIdx];
+    const p2 = coords[segIdx + 1];
+
+    const lng = p1[0] + (p2[0] - p1[0]) * t;
+    const lat = p1[1] + (p2[1] - p1[1]) * t;
+
+    // Calculate heading from current polyline node to next polyline node
+    let segBearing = routeData.segmentBearings[segIdx];
+    // Smooth transition into next curve as vehicle nears node (t > 0.70)
+    if (t > 0.70 && segIdx < n - 2) {
+      const nextBearing = routeData.segmentBearings[segIdx + 1];
+      let diff = (nextBearing - segBearing) % 360;
+      if (diff < -180) diff += 360;
+      if (diff > 180) diff -= 360;
+      const blendRatio = (t - 0.70) / 0.30;
+      segBearing = (segBearing + diff * blendRatio + 360) % 360;
+    }
+
+    return {
+      lngLat: [lng, lat],
+      bearing: segBearing
+    };
+  }
+
+  function findClosestDistanceOnRoute(routeData, lat, lng, minSearchDist) {
+    const coords = routeData.coords;
+    const n = coords.length;
+    const p = [lng, lat];
+    let bestDistAlongRoute = 0;
+    let minDistanceToSegment = Infinity;
+
+    const startDist = typeof minSearchDist === 'number' ? Math.max(0, minSearchDist - 15) : 0;
+
+    for (let i = 0; i < n - 1; i++) {
+      const cumEnd = routeData.cumulativeDistances[i + 1];
+      if (cumEnd < startDist) continue;
+
+      const p1 = coords[i];
+      const p2 = coords[i + 1];
+
+      const dx = p2[0] - p1[0];
+      const dy = p2[1] - p1[1];
+      const lenSq = dx * dx + dy * dy;
+
+      let t = 0;
+      if (lenSq > 1e-12) {
+        t = ((p[0] - p1[0]) * dx + (p[1] - p1[1]) * dy) / lenSq;
+        t = Math.max(0, Math.min(1, t));
+      }
+
+      const projLng = p1[0] + dx * t;
+      const projLat = p1[1] + dy * t;
+      const dToSeg = distanceMeters(p, [projLng, projLat]);
+
+      if (dToSeg < minDistanceToSegment) {
+        minDistanceToSegment = dToSeg;
+        bestDistAlongRoute = routeData.cumulativeDistances[i] + t * routeData.segDistances[i];
+      }
+    }
+
+    return bestDistAlongRoute;
+  }
+
+  function renderVehicleMarker(containerId, lat, lng, headingDegrees, ambulanceId) {
+    const map = maps[containerId];
     if (!map) return;
+    const state = getState(containerId);
+
+    // Continuous shortest-arc angular interpolation to prevent 350-degree spinning
+    let continuousAngle = typeof headingDegrees === 'number' ? headingDegrees : 0;
+    if (typeof state.continuousHeading === 'number') {
+      let diff = (continuousAngle - (state.continuousHeading % 360)) % 360;
+      if (diff < -180) diff += 360;
+      if (diff > 180) diff -= 360;
+      continuousAngle = state.continuousHeading + diff;
+    }
+    state.continuousHeading = continuousAngle;
 
     if (!markers[containerId]) markers[containerId] = {};
 
@@ -509,8 +780,8 @@ window.uyirkappanMaps = window.uyirkappanMaps || {};
       markers[containerId].ambulance.setLngLat([lng, lat]);
       const root = markers[containerId].ambulance.getElement();
       const iconEl = root.querySelector('.uk-ambulance-icon');
-      if (iconEl && typeof headingDegrees === 'number') {
-        iconEl.style.transform = 'rotate(' + headingDegrees + 'deg)';
+      if (iconEl) {
+        iconEl.style.transform = 'rotate(' + continuousAngle + 'deg)';
       }
       const bubble = root.querySelector('.uk-ambulance-bubble');
       if (bubble) {
@@ -522,7 +793,7 @@ window.uyirkappanMaps = window.uyirkappanMaps || {};
       el.innerHTML =
         '<div class="uk-ambulance-bubble">' +
         (ambulanceId || 'AMB') +
-        '</div><div class="uk-ambulance-icon">🚑</div>';
+        '</div><div class="uk-ambulance-icon">' + renderAmbulanceSvg() + '</div>';
 
       const marker = new maplibregl.Marker({ element: el, anchor: 'center' })
         .setLngLat([lng, lat])
@@ -530,14 +801,32 @@ window.uyirkappanMaps = window.uyirkappanMaps || {};
 
       markers[containerId].ambulance = marker;
       const iconEl = el.querySelector('.uk-ambulance-icon');
-      if (iconEl && typeof headingDegrees === 'number') {
-        iconEl.style.transform = 'rotate(' + headingDegrees + 'deg)';
+      if (iconEl) {
+        iconEl.style.transform = 'rotate(' + continuousAngle + 'deg)';
       }
     }
+  }
+
+  window.uyirkappanMaps.updateAmbulanceMarker = function (containerId, lat, lng, headingDegrees, ambulanceId) {
+    console.log('[JS BRIDGE] updateAmbulanceMarker:', containerId, lat, lng, headingDegrees, ambulanceId);
+    const map = maps[containerId];
+    getState(containerId).ambulance = {
+      lat: lat,
+      lng: lng,
+      heading: headingDegrees,
+      id: ambulanceId
+    };
+    if (!map) {
+      console.warn('[JS BRIDGE] updateAmbulanceMarker: map not yet initialized for', containerId);
+      return;
+    }
+    renderVehicleMarker(containerId, lat, lng, headingDegrees, ambulanceId);
   };
 
   window.uyirkappanMaps.clearAmbulanceMarker = function (containerId) {
-    getState(containerId).ambulance = null;
+    console.log('[JS BRIDGE] clearAmbulanceMarker:', containerId);
+    const state = getState(containerId);
+    state.ambulance = null;
     if (markers[containerId] && markers[containerId].ambulance) {
       try { markers[containerId].ambulance.remove(); } catch (e) {}
       markers[containerId].ambulance = null;
@@ -545,17 +834,44 @@ window.uyirkappanMaps = window.uyirkappanMaps || {};
   };
 
   window.uyirkappanMaps.drawRoute = function (containerId, coordinates) {
+    console.log('[JS BRIDGE] drawRoute:', containerId, coordinates ? (coordinates.length || 'present') : 'null');
     getState(containerId).route = coordinates;
     const map = maps[containerId];
     if (!map) {
-      pendingRoutes[containerId] = coordinates;
+      console.warn('[JS BRIDGE] drawRoute: map not yet initialized for', containerId);
       return;
     }
 
-    if (!map.isStyleLoaded()) {
-      map.once('style.load', function () {
+    if (!map.isStyleLoaded() && !map.loaded()) {
+      const retryDraw = function () {
         window.uyirkappanMaps.drawRoute(containerId, coordinates);
-      });
+      };
+      map.once('load', retryDraw);
+      map.once('styledata', retryDraw);
+      return;
+    }
+
+    const cleanCoords = [];
+    if (coordinates) {
+      try {
+        const len = coordinates.length;
+        for (let i = 0; i < len; i++) {
+          const pt = coordinates[i];
+          if (pt && pt.length >= 2) {
+            const lng = Number(pt[0]);
+            const lat = Number(pt[1]);
+            if (!isNaN(lng) && !isNaN(lat)) {
+              cleanCoords.push([lng, lat]);
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('[JS BRIDGE] drawRoute coordinate parsing error:', err);
+      }
+    }
+
+    if (cleanCoords.length < 2) {
+      console.warn('[JS BRIDGE] drawRoute: coordinates array has less than 2 valid points');
       return;
     }
 
@@ -568,7 +884,7 @@ window.uyirkappanMaps = window.uyirkappanMaps || {};
       properties: {},
       geometry: {
         type: 'LineString',
-        coordinates: coordinates
+        coordinates: cleanCoords
       }
     };
 
@@ -580,7 +896,6 @@ window.uyirkappanMaps = window.uyirkappanMaps || {};
         data: geojson
       });
 
-      // Google Maps style: Deep navy/blue casing underlayer for sharp contrast
       map.addLayer({
         id: casingLayerId,
         type: 'line',
@@ -590,13 +905,12 @@ window.uyirkappanMaps = window.uyirkappanMaps || {};
           'line-cap': 'round'
         },
         paint: {
-          'line-color': '#174EA6', // Google dark blue casing
+          'line-color': '#174EA6',
           'line-width': 8,
           'line-opacity': 0.95
         }
       });
 
-      // Google Maps style: Vibrant primary navigation blue line (#4285F4)
       map.addLayer({
         id: layerId,
         type: 'line',
@@ -606,14 +920,13 @@ window.uyirkappanMaps = window.uyirkappanMaps || {};
           'line-cap': 'round'
         },
         paint: {
-          'line-color': '#4285F4', // Google Maps navigation blue
+          'line-color': '#4285F4',
           'line-width': 5.5,
           'line-opacity': 1.0
         }
       });
     }
 
-    // Auto-focus & frame the route ONCE per destination leg (does NOT bounce/zoom as ambulance moves)
     if (coordinates && coordinates.length > 1) {
       try {
         const endPt = coordinates[coordinates.length - 1];
@@ -643,8 +956,11 @@ window.uyirkappanMaps = window.uyirkappanMaps || {};
   };
 
   window.uyirkappanMaps.clearRoute = function (containerId) {
-    getState(containerId).route = null;
-    getState(containerId).lastFittedDestKey = null;
+    const state = getState(containerId);
+    state.route = null;
+    state.routeData = null;
+    state.currentRouteDist = null;
+    state.lastFittedDestKey = null;
     const map = maps[containerId];
     if (!map || !map.isStyleLoaded()) return;
     try {
@@ -721,7 +1037,13 @@ window.uyirkappanMaps = window.uyirkappanMaps || {};
       try { resizeObservers[containerId].disconnect(); } catch (e) {}
       delete resizeObservers[containerId];
     }
+    const state = overlayState[containerId];
+    if (state && state.ambulanceAnim && state.ambulanceAnim.rafId) {
+      try { cancelAnimationFrame(state.ambulanceAnim.rafId); } catch (e) {}
+      state.ambulanceAnim = null;
+    }
     if (markers[containerId]) {
+      if (markers[containerId].userLocation) try { markers[containerId].userLocation.remove(); } catch (e) {}
       if (markers[containerId].incident) try { markers[containerId].incident.remove(); } catch (e) {}
       if (markers[containerId].ambulance) try { markers[containerId].ambulance.remove(); } catch (e) {}
       if (markers[containerId].hospitals) {

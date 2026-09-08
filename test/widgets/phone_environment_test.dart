@@ -2,14 +2,12 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:uyirkappan_bystander/data/datasources/emergency_request_datasource.dart';
-import 'package:uyirkappan_bystander/data/datasources/mock/mock_emergency_request_datasource.dart';
 import 'package:uyirkappan_bystander/data/models/emergency_request_model.dart';
 import 'package:uyirkappan_bystander/data/repositories/emergency_request_repository_impl.dart';
 import 'package:uyirkappan_bystander/domain/entities/location_data.dart';
 import 'package:uyirkappan_bystander/domain/entities/request_status.dart';
 import 'package:uyirkappan_bystander/presentation/controllers/emergency_controller.dart';
 import 'package:uyirkappan_bystander/presentation/controllers/location_controller.dart';
-import 'package:uyirkappan_bystander/presentation/controllers/simulation_controller.dart';
 import 'package:uyirkappan_bystander/presentation/screens/home/home_screen.dart';
 import '../unit/mock_repository_test.dart';
 
@@ -56,7 +54,6 @@ void main() {
     late EmergencyRequestRepositoryImpl repository;
     late EmergencyController emergencyController;
     late LocationController locationController;
-    late SimulationController simulationController;
 
     setUp(() {
       fakeDataSource = DeterministicPhoneTestDataSource();
@@ -67,7 +64,6 @@ void main() {
       );
       emergencyController = EmergencyController(repository: repository);
       locationController = LocationController();
-      simulationController = SimulationController(mockDataSource: MockEmergencyRequestDataSource());
     });
 
     tearDown(() {
@@ -85,7 +81,6 @@ void main() {
           home: HomeScreen(
             emergencyController: emergencyController,
             locationController: locationController,
-            simulationController: simulationController,
           ),
         ),
       );
@@ -124,7 +119,6 @@ void main() {
           home: HomeScreen(
             emergencyController: emergencyController,
             locationController: locationController,
-            simulationController: simulationController,
           ),
         ),
       );
@@ -164,7 +158,6 @@ void main() {
           home: HomeScreen(
             emergencyController: emergencyController,
             locationController: locationController,
-            simulationController: simulationController,
           ),
         ),
       );

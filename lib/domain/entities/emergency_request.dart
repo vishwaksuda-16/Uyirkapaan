@@ -23,8 +23,9 @@ class EmergencyRequest {
   final String? additionalNotes;
   final int fallbackCount;
   final int? currentETA;
+  final List<AssignmentAttempt> attemptsHistory;
 
-  // Evaluation Timestamps (for response-time analytics: T0 - T6)
+  // Evaluation Timestamps (for response-time analytics: T0 - T6/T7)
   final DateTime? t0UserPressed;
   final DateTime? t1RequestReceived;
   final DateTime? t2MatchingCompleted;
@@ -50,6 +51,7 @@ class EmergencyRequest {
     this.additionalNotes,
     this.fallbackCount = 0,
     this.currentETA,
+    this.attemptsHistory = const [],
     this.t0UserPressed,
     this.t1RequestReceived,
     this.t2MatchingCompleted,
@@ -60,7 +62,7 @@ class EmergencyRequest {
   });
 
   /// Alias for fallback history as named in backend API response
-  int get attempts => fallbackCount;
+  int get attempts => attemptsHistory.isNotEmpty ? attemptsHistory.length : fallbackCount;
 
   EmergencyRequest copyWith({
     String? requestId,
@@ -79,6 +81,7 @@ class EmergencyRequest {
     String? additionalNotes,
     int? fallbackCount,
     int? currentETA,
+    List<AssignmentAttempt>? attemptsHistory,
     DateTime? t0UserPressed,
     DateTime? t1RequestReceived,
     DateTime? t2MatchingCompleted,
@@ -104,6 +107,7 @@ class EmergencyRequest {
       additionalNotes: additionalNotes ?? this.additionalNotes,
       fallbackCount: fallbackCount ?? this.fallbackCount,
       currentETA: currentETA ?? this.currentETA,
+      attemptsHistory: attemptsHistory ?? this.attemptsHistory,
       t0UserPressed: t0UserPressed ?? this.t0UserPressed,
       t1RequestReceived: t1RequestReceived ?? this.t1RequestReceived,
       t2MatchingCompleted: t2MatchingCompleted ?? this.t2MatchingCompleted,
@@ -141,5 +145,66 @@ class EmergencyRequest {
       return t6AmbulanceArrived!.difference(t0UserPressed!);
     }
     return null;
+  }
+
+  Duration? get fallbackDelay {
+    if (attemptsHistory.length > 1) {
+      final firstAssigned = attemptsHistory.first.assignedAt;
+      final acceptedAttempt = attemptsHistory.firstWhere(
+        (a) => a.response == 'ACCEPTED',
+        orElse: () => attemptsHistory.last,
+      );
+      if (acceptedAttempt.responseAt != null) {
+        return acceptedAttempt.responseAt!.difference(firstAssigned);
+      }
+    }
+    return null;
+  }
+}
+
+/// Represents an individual dispatch assignment attempt as defined in Section 23 of the PDF.
+class AssignmentAttempt {
+  final int attemptNumber;
+  final String ambulanceId;
+  final String? driverName;
+  final DateTime assignedAt;
+  final DateTime? responseAt;
+  final String response; // 'ACCEPTED', 'REJECTED', 'TIMEOUT', 'PENDING'
+  final String? failureReason;
+
+  const AssignmentAttempt({
+    required this.attemptNumber,
+    required this.ambulanceId,
+    this.driverName,
+    required this.assignedAt,
+    this.responseAt,
+    required this.response,
+    this.failureReason,
+  });
+
+  Map<String, dynamic> toJson() => {
+    'attemptNumber': attemptNumber,
+    'ambulanceId': ambulanceId,
+    'driverName': driverName,
+    'assignedAt': assignedAt.toIso8601String(),
+    'responseAt': responseAt?.toIso8601String(),
+    'response': response,
+    'failureReason': failureReason,
+  };
+
+  factory AssignmentAttempt.fromJson(Map<String, dynamic> json) {
+    return AssignmentAttempt(
+      attemptNumber: json['attemptNumber'] as int? ?? 1,
+      ambulanceId: json['ambulanceId'] as String? ?? 'AMB-01',
+      driverName: json['driverName'] as String?,
+      assignedAt: json['assignedAt'] != null
+          ? DateTime.parse(json['assignedAt'] as String)
+          : DateTime.now(),
+      responseAt: json['responseAt'] != null
+          ? DateTime.parse(json['responseAt'] as String)
+          : null,
+      response: json['response'] as String? ?? 'ACCEPTED',
+      failureReason: json['failureReason'] as String?,
+    );
   }
 }

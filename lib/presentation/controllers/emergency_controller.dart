@@ -80,24 +80,14 @@ class EmergencyController extends ChangeNotifier {
         break;
       case 'AMBULANCE_ASSIGNED':
         final ambId = event.data['ambulanceId'] ?? event.data['assignedAmbulanceId'] ?? 'AMB';
-        final eta = event.data['eta'] ?? event.data['currentETA'] ?? '5';
-        notif = 'Ambulance $ambId assigned. ETA: $eta minutes';
+        notif = 'Ambulance $ambId assigned.';
         break;
       case 'ASSIGNMENT_ACCEPTED':
         notif = 'Driver accepted. En route to pickup';
         break;
       case 'AMBULANCE_LOCATION_UPDATED':
-        // Silently handled by map tracking
         return;
       case 'ETA_UPDATED':
-        final etaMin = event.data['etaMinutes'] ?? event.data['eta'] ?? event.data['currentETA'];
-        if (etaMin != null) {
-          notif = 'ETA updated: $etaMin minutes';
-          if (_activeRequest != null) {
-            _activeRequest = _activeRequest!.copyWith(currentETA: (etaMin as num).toInt());
-            notifyListeners();
-          }
-        }
         return;
       case 'STATUS_UPDATED':
         final st = event.data['status'] ?? '';
@@ -108,8 +98,7 @@ class EmergencyController extends ChangeNotifier {
         break;
       case 'AMBULANCE_REASSIGNED':
         final ambId = event.data['ambulanceId'] ?? event.data['assignedAmbulanceId'] ?? 'AMB';
-        final eta = event.data['eta'] ?? event.data['currentETA'] ?? '4';
-        notif = 'Ambulance reassigned to $ambId. New ETA: $eta minutes';
+        notif = 'Ambulance reassigned to $ambId.';
         break;
       case 'AMBULANCE_ARRIVED':
         notif = 'Ambulance has arrived at your location';

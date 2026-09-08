@@ -1,4 +1,5 @@
 import 'eta_info.dart';
+import 'location_data.dart';
 import 'request_status.dart';
 
 /// Entity representing real-time telemetry of the assigned emergency vehicle.
@@ -15,6 +16,7 @@ class TrackingInfo {
   final String? vehicleNumber;
   final String? driverName;
   final String? driverPhone;
+  final List<LocationData>? routeWaypoints;
 
   const TrackingInfo({
     required this.ambulanceId,
@@ -29,6 +31,7 @@ class TrackingInfo {
     this.vehicleNumber,
     this.driverName,
     this.driverPhone,
+    this.routeWaypoints,
   });
 
   TrackingInfo copyWith({
@@ -44,6 +47,7 @@ class TrackingInfo {
     String? vehicleNumber,
     String? driverName,
     String? driverPhone,
+    List<LocationData>? routeWaypoints,
   }) {
     return TrackingInfo(
       ambulanceId: ambulanceId ?? this.ambulanceId,
@@ -58,6 +62,8 @@ class TrackingInfo {
       vehicleNumber: vehicleNumber ?? this.vehicleNumber,
       driverName: driverName ?? this.driverName,
       driverPhone: driverPhone ?? this.driverPhone,
+      routeWaypoints: routeWaypoints ?? this.routeWaypoints,
     );
   }
 }
+

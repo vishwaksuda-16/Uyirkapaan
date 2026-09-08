@@ -35,20 +35,72 @@
   <!-- MapLibre GL JS v5 for OpenFreeMap Integration -->
   <script src="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.js"></script>
   <link href="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.css" rel="stylesheet" />
-  <script src="maplibre_bridge.js?v=20260905_3"></script>
+  <script src="maplibre_bridge.js?v=20260908_5"></script>
 
   <style>
-    /* Custom MapLibre Markers for UyirKappan */
+    /* User Current GPS Location (Google Maps Style Pulsing Blue Dot) */
+    .uk-user-location-marker {
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 28px;
+      height: 28px;
+      pointer-events: none;
+      z-index: 22;
+    }
+    .uk-user-location-dot {
+      width: 18px;
+      height: 18px;
+      background: #2563EB;
+      border: 3.5px solid #FFFFFF;
+      border-radius: 50%;
+      box-shadow: 0 0 12px rgba(37, 99, 235, 0.9), 0 2px 8px rgba(0, 0, 0, 0.4);
+      z-index: 2;
+    }
+    .uk-user-location-pulse {
+      position: absolute;
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      background: rgba(37, 99, 235, 0.35);
+      animation: uk-blue-pulse 2s infinite ease-out;
+      z-index: 1;
+    }
+    @keyframes uk-blue-pulse {
+      0% { transform: scale(0.3); opacity: 1; }
+      100% { transform: scale(2.4); opacity: 0; }
+    }
+    .uk-user-location-callout {
+      position: absolute;
+      bottom: calc(100% + 4px);
+      background: #1E40AF;
+      color: #FFFFFF;
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: 0.3px;
+      padding: 3px 8px;
+      border-radius: 10px;
+      box-shadow: 0 3px 8px rgba(30, 64, 175, 0.4);
+      border: 1px solid #FFFFFF;
+      white-space: nowrap;
+      pointer-events: none;
+    }
+
+    /* Custom Incident Pinpoint Marker */
     .uk-incident-marker {
       position: relative;
       display: flex;
-      flex-direction: column;
       align-items: center;
       justify-content: center;
       cursor: pointer;
-      z-index: 10;
+      z-index: 25;
+      width: 32px;
+      height: 32px;
     }
     .uk-incident-callout {
+      position: absolute;
+      bottom: calc(100% + 6px);
       background: #D32F2F;
       color: #FFFFFF;
       font-size: 11px;
@@ -59,8 +111,8 @@
       box-shadow: 0 4px 12px rgba(211, 47, 47, 0.45);
       border: 1.5px solid #FFFFFF;
       white-space: nowrap;
-      margin-bottom: 6px;
       animation: uk-bounce 2s infinite ease-in-out;
+      pointer-events: none;
     }
     @keyframes uk-bounce {
       0%, 100% { transform: translateY(0); }
@@ -119,20 +171,20 @@
       margin-bottom: 2px;
     }
     .uk-hospital-icon {
-      font-size: 14px;
+      font-size: 15px;
     }
     .uk-hospital-name {
       font-size: 11px;
       font-weight: 800;
-      color: #0F172A;
+      color: #1E293B;
     }
     .uk-hospital-dist {
-      font-size: 10px;
+      font-size: 9.5px;
       font-weight: 700;
       color: #DC2626;
       background: #FEE2E2;
       padding: 1px 4px;
-      border-radius: 4px;
+      border-radius: 6px;
     }
     .uk-hospital-pin {
       width: 10px;
@@ -140,10 +192,10 @@
       background: #DC2626;
       border: 2px solid #FFFFFF;
       border-radius: 50%;
-      box-shadow: 0 1px 4px rgba(0,0,0,0.3);
+      box-shadow: 0 2px 6px rgba(0,0,0,0.4);
     }
 
-    /* Standby Ambulances */
+    /* Standby Ambulance Markers */
     .uk-standby-ambulance-marker {
       display: flex;
       flex-direction: column;
@@ -155,28 +207,27 @@
       display: flex;
       align-items: center;
       gap: 4px;
-      background: #0F172A;
+      background: #1E293B;
       color: #FFFFFF;
-      font-size: 10px;
+      font-size: 9.5px;
       font-weight: 800;
-      padding: 3px 8px;
+      padding: 2px 6px;
       border-radius: 10px;
       border: 1px solid #10B981;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.35);
+      box-shadow: 0 2px 6px rgba(0,0,0,0.3);
       white-space: nowrap;
-      margin-bottom: 2px;
+      margin-bottom: 1px;
     }
     .uk-pulse-dot-green {
-      width: 7px;
-      height: 7px;
+      width: 6px;
+      height: 6px;
       background: #10B981;
       border-radius: 50%;
-      box-shadow: 0 0 6px #10B981;
-      animation: uk-pulse-green 1.5s infinite;
+      animation: uk-green-pulse 1.5s infinite;
     }
-    @keyframes uk-pulse-green {
-      0%, 100% { opacity: 1; transform: scale(1); }
-      50% { opacity: 0.4; transform: scale(0.8); }
+    @keyframes uk-green-pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
     }
     .uk-standby-icon {
       font-size: 20px;
@@ -185,13 +236,18 @@
 
     /* Active Dispatched Ambulance */
     .uk-ambulance-marker {
+      position: relative;
       display: flex;
-      flex-direction: column;
       align-items: center;
+      justify-content: center;
       cursor: pointer;
-      z-index: 12;
+      z-index: 28;
+      width: 32px;
+      height: 52px;
     }
     .uk-ambulance-bubble {
+      position: absolute;
+      bottom: calc(100% + 4px);
       background: #DC2626;
       color: #FFFFFF;
       font-size: 11px;
@@ -201,12 +257,19 @@
       border: 1.5px solid #FFFFFF;
       box-shadow: 0 3px 8px rgba(220, 38, 38, 0.4);
       white-space: nowrap;
-      margin-bottom: 2px;
+      pointer-events: none;
     }
     .uk-ambulance-icon {
-      font-size: 28px;
-      filter: drop-shadow(0 3px 6px rgba(0,0,0,0.4));
-      transition: transform 0.3s ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 32px;
+      height: 52px;
+      transform-origin: center center;
+      transition: transform 0.08s linear;
+    }
+    .uk-ambulance-svg {
+      filter: drop-shadow(0 4px 10px rgba(0,0,0,0.5));
     }
 
     /* Map Tooltip Popups */

@@ -1,4 +1,3 @@
-import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
@@ -9,9 +8,8 @@ import '../../../domain/entities/location_data.dart';
 import '../../../domain/entities/nearby_poi.dart';
 
 /// Native Mobile & Desktop implementation of OpenFreeMap powered by flutter_map.
-/// Provides full touch gestures (pan, pinch zoom, fling), live OpenStreetMap & CartoDB tiles,
-/// real-time incident pickup pin positioning, ambulance telemetry, and route polylines.
 class PlatformOpenFreeMapView extends StatefulWidget {
+  final LocationData? userLocation;
   final LocationData? incidentLocation;
   final LocationData? ambulanceLocation;
   final double? heading;
@@ -27,6 +25,7 @@ class PlatformOpenFreeMapView extends StatefulWidget {
 
   const PlatformOpenFreeMapView({
     super.key,
+    this.userLocation,
     this.incidentLocation,
     this.ambulanceLocation,
     this.heading,
@@ -45,6 +44,10 @@ class PlatformOpenFreeMapView extends StatefulWidget {
 
   static void suppressClicks([int ms = 600]) {
     _suppressUntil = DateTime.now().add(Duration(milliseconds: ms));
+  }
+
+  static void setUIHovered(bool hovered) {
+    // No-op for non-web platforms
   }
 
   @override
@@ -94,25 +97,30 @@ class _PlatformOpenFreeMapViewState extends State<PlatformOpenFreeMapView>
   String _getTileUrl(OpenFreeMapStyle style) {
     switch (style) {
       case OpenFreeMapStyle.dark:
-        return 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png';
-      case OpenFreeMapStyle.fiord:
-        return 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager_labels_under/{z}/{x}/{y}@2x.png';
-      case OpenFreeMapStyle.positron:
-        return 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png';
-      case OpenFreeMapStyle.liberty:
         return 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+      case OpenFreeMapStyle.fiord:
+        return 'https://{s}.tile-cyclosm.openstreetmap.fr/cyclosm/{z}/{x}/{y}.png';
+      case OpenFreeMapStyle.positron:
+        return 'https://{s}.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png';
+      case OpenFreeMapStyle.liberty:
+        return 'https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png';
       case OpenFreeMapStyle.bright:
       case OpenFreeMapStyle.threeD:
-        return 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png';
+        return 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
     }
   }
 
   List<String> _getSubdomains(OpenFreeMapStyle style) {
     switch (style) {
       case OpenFreeMapStyle.liberty:
+        return const ['a', 'b'];
+      case OpenFreeMapStyle.positron:
+      case OpenFreeMapStyle.fiord:
+        return const ['a', 'b', 'c'];
+      case OpenFreeMapStyle.dark:
+      case OpenFreeMapStyle.bright:
+      case OpenFreeMapStyle.threeD:
         return const [];
-      default:
-        return const ['a', 'b', 'c', 'd'];
     }
   }
 
@@ -164,33 +172,22 @@ class _PlatformOpenFreeMapViewState extends State<PlatformOpenFreeMapView>
               subdomains: subdomains,
               userAgentPackageName: 'com.uyirkappan.bystander.uyirkappan_bystander',
               maxZoom: 19,
+              tileBuilder: widget.style == OpenFreeMapStyle.dark
+                  ? (context, tileWidget, tile) {
+                      return ColorFiltered(
+                        colorFilter: const ColorFilter.matrix([
+                          -0.8, 0, 0, 0, 255,
+                          0, -0.8, 0, 0, 255,
+                          0, 0, -0.8, 0, 255,
+                          0, 0, 0, 1, 0,
+                        ]),
+                        child: tileWidget,
+                      );
+                    }
+                  : null,
             ),
 
-            // 2. Simulated / Real-time Route Polylines
-            if (widget.routeWaypoints != null && widget.routeWaypoints!.length >= 2) ...[
-              PolylineLayer(
-                polylines: [
-                  // Outer casing glow
-                  Polyline(
-                    points: widget.routeWaypoints!
-                        .map((pt) => LatLng(pt.latitude, pt.longitude))
-                        .toList(),
-                    strokeWidth: 7.5,
-                    color: const Color(0xFF174EA6),
-                  ),
-                  // Vibrant route inner line
-                  Polyline(
-                    points: widget.routeWaypoints!
-                        .map((pt) => LatLng(pt.latitude, pt.longitude))
-                        .toList(),
-                    strokeWidth: 5.0,
-                    color: const Color(0xFF4285F4),
-                  ),
-                ],
-              ),
-            ],
-
-            // 3. Search Radar Waves (when looking for nearest responder)
+            // 2. Search Radar Waves (when looking for nearest responder)
             if (widget.showSearchRadar)
               MarkerLayer(
                 markers: [
@@ -223,6 +220,26 @@ class _PlatformOpenFreeMapViewState extends State<PlatformOpenFreeMapView>
                 ],
               ),
 
+            // 3. User GPS Location Marker
+            if (widget.userLocation != null)
+              MarkerLayer(
+                markers: [
+                  Marker(
+                    point: LatLng(widget.userLocation!.latitude, widget.userLocation!.longitude),
+                    width: 24,
+                    height: 24,
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF2563EB),
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.white, width: 2.5),
+                        boxShadow: const [BoxShadow(color: Colors.black38, blurRadius: 4)],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+
             // 4. Nearby Hospital POI Markers
             if (widget.nearbyHospitals != null && widget.nearbyHospitals!.isNotEmpty)
               MarkerLayer(
@@ -244,7 +261,7 @@ class _PlatformOpenFreeMapViewState extends State<PlatformOpenFreeMapView>
                 }).toList(),
               ),
 
-            // 5. Nearby Ambulances (idle/patrolling)
+            // 5. Nearby Standby Ambulances (idle/patrolling)
             if (widget.nearbyAmbulances != null && widget.nearbyAmbulances!.isNotEmpty)
               MarkerLayer(
                 markers: widget.nearbyAmbulances!.map((amb) {
@@ -265,65 +282,7 @@ class _PlatformOpenFreeMapViewState extends State<PlatformOpenFreeMapView>
                 }).toList(),
               ),
 
-            // 6. Assigned Ambulance Live Telemetry Marker
-            if (widget.ambulanceLocation != null)
-              MarkerLayer(
-                markers: [
-                  Marker(
-                    point: LatLng(
-                      widget.ambulanceLocation!.latitude,
-                      widget.ambulanceLocation!.longitude,
-                    ),
-                    width: 70,
-                    height: 70,
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF1E293B),
-                            borderRadius: BorderRadius.circular(8),
-                            boxShadow: const [BoxShadow(color: Colors.black38, blurRadius: 4)],
-                          ),
-                          child: Text(
-                            widget.ambulanceId ?? 'AMB',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 9,
-                              fontWeight: FontWeight.w900,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 2),
-                        Transform.rotate(
-                          angle: (widget.heading ?? 0.0) * (math.pi / 180),
-                          child: Container(
-                            padding: const EdgeInsets.all(7),
-                            decoration: BoxDecoration(
-                              color: AppColors.statusEnRoute,
-                              shape: BoxShape.circle,
-                              boxShadow: [
-                                BoxShadow(
-                                  color: AppColors.statusEnRoute.withValues(alpha: 0.6),
-                                  blurRadius: 10,
-                                ),
-                              ],
-                            ),
-                            child: const Icon(
-                              Icons.navigation_rounded,
-                              color: Colors.white,
-                              size: 16,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-
-            // 7. Incident / Pickup Point Marker
+            // 6. Incident / Pickup Point Marker
             MarkerLayer(
               markers: [
                 Marker(

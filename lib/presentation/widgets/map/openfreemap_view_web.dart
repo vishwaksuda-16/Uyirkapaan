@@ -10,6 +10,7 @@ import '../../../domain/entities/nearby_poi.dart';
 
 /// Web implementation of OpenFreeMap powered by MapLibre GL JS (WebGL).
 class PlatformOpenFreeMapView extends StatefulWidget {
+  final LocationData? userLocation;
   final LocationData? incidentLocation;
   final LocationData? ambulanceLocation;
   final double? heading;
@@ -25,6 +26,7 @@ class PlatformOpenFreeMapView extends StatefulWidget {
 
   const PlatformOpenFreeMapView({
     super.key,
+    this.userLocation,
     this.incidentLocation,
     this.ambulanceLocation,
     this.heading,
@@ -47,6 +49,15 @@ class PlatformOpenFreeMapView extends StatefulWidget {
       final value = js.context['uyirkappanMaps'];
       if (value is js.JsObject && value.hasProperty('suppressAllClicks')) {
         value.callMethod('suppressAllClicks', [ms]);
+      }
+    } catch (_) {}
+  }
+
+  static void setUIHovered(bool hovered) {
+    try {
+      final value = js.context['uyirkappanMaps'];
+      if (value is js.JsObject && value.hasProperty('setUIHovered')) {
+        value.callMethod('setUIHovered', [hovered]);
       }
     } catch (_) {}
   }
@@ -96,16 +107,29 @@ class _PlatformOpenFreeMapViewState extends State<PlatformOpenFreeMapView> {
       },
     );
 
-    // Listen to CustomEvent from MapLibre JS bridge
+    // Listen to CustomEvent from MapLibre JS bridge with safe DOM event wrapper
     _eventSub = html.window.on['uyirkappan_location_picked_$_mapId'].listen((html.Event event) {
       if (event is html.CustomEvent && event.detail != null) {
         try {
-          final jsDetail = js.JsObject.fromBrowserObject(event.detail);
-          final lat = jsDetail['lat'];
-          final lng = jsDetail['lng'];
-          _onJsLocationPicked(lat, lng);
+          final detail = event.detail;
+          dynamic lat;
+          dynamic lng;
+          if (detail is Map) {
+            lat = detail['lat'];
+            lng = detail['lng'];
+          } else {
+            final jsEvent = js.JsObject.fromBrowserObject(event);
+            final d = jsEvent['detail'];
+            if (d != null) {
+              lat = d['lat'];
+              lng = d['lng'];
+            }
+          }
+          if (lat != null && lng != null) {
+            _onJsLocationPicked(lat, lng);
+          }
         } catch (e) {
-          debugPrint('Error processing picked location: $e');
+          debugPrint('Error processing picked location event: $e');
         }
       }
     });
@@ -136,35 +160,49 @@ class _PlatformOpenFreeMapViewState extends State<PlatformOpenFreeMapView> {
   }
 
   js.JsObject? get _jsMaps {
-    final value = js.context['uyirkappanMaps'];
-    if (value is js.JsObject) return value;
+    try {
+      final value = js.context['uyirkappanMaps'];
+      if (value is js.JsObject) {
+        return value;
+      }
+    } catch (_) {}
     return null;
   }
 
   void _initMapLibre() {
+    if (_isMapInitialized) return;
+
     final jsMaps = _jsMaps;
     if (jsMaps == null) {
-      if (_initAttempts < 50 && mounted) {
-        _initAttempts++;
-        Future.delayed(const Duration(milliseconds: 80), () {
+      _initAttempts++;
+      if (_initAttempts < 30) {
+        Future.delayed(const Duration(milliseconds: 100), () {
           if (mounted) _initMapLibre();
         });
       }
       return;
     }
 
-    final lat = widget.incidentLocation?.latitude ?? MapConstants.defaultLatitude;
-    final lng = widget.incidentLocation?.longitude ?? MapConstants.defaultLongitude;
-
-    if (_containerElement != null) {
-      _callJs('registerContainer', [_mapId, _containerElement]);
+    final container = html.document.getElementById(_mapId) ?? _containerElement;
+    if (container == null) {
+      _initAttempts++;
+      if (_initAttempts < 30) {
+        Future.delayed(const Duration(milliseconds: 100), () {
+          if (mounted) _initMapLibre();
+        });
+      }
+      return;
     }
+
+    final initialLat = widget.incidentLocation?.latitude ?? MapConstants.defaultLatitude;
+    final initialLng = widget.incidentLocation?.longitude ?? MapConstants.defaultLongitude;
+    final initialZoom = widget.isPickerMode ? MapConstants.pickerZoom : MapConstants.trackingZoom;
 
     _callJs('initMap', [
       _mapId,
-      lat,
-      lng,
-      widget.isPickerMode ? MapConstants.pickerZoom : MapConstants.trackingZoom,
+      initialLat,
+      initialLng,
+      initialZoom,
       widget.style.url,
       widget.isPickerMode,
       0,
@@ -187,6 +225,7 @@ class _PlatformOpenFreeMapViewState extends State<PlatformOpenFreeMapView> {
   }
 
   void _syncOverlays() {
+    _updateUserLocation();
     _updateIncident(fly: false);
     _updateNearbyHospitals();
     _updateNearbyAmbulances();
@@ -196,6 +235,15 @@ class _PlatformOpenFreeMapViewState extends State<PlatformOpenFreeMapView> {
     _updateRoute();
     _updateSearchRadar();
     _fitIfNeeded();
+  }
+
+  void _updateUserLocation() {
+    if (widget.userLocation == null) return;
+    _callJs('updateUserLocationMarker', [
+      _mapId,
+      widget.userLocation!.latitude,
+      widget.userLocation!.longitude,
+    ]);
   }
 
   void _updateIncident({bool fly = true}) {
@@ -227,6 +275,7 @@ class _PlatformOpenFreeMapViewState extends State<PlatformOpenFreeMapView> {
   }
 
   void _updateAmbulance() {
+    debugPrint('>>> [DART] _updateAmbulance called: ${widget.ambulanceLocation}, heading: ${widget.heading}, ambId: ${widget.ambulanceId}');
     if (widget.ambulanceLocation == null) {
       _callJs('clearAmbulanceMarker', [_mapId]);
       return;
@@ -241,6 +290,7 @@ class _PlatformOpenFreeMapViewState extends State<PlatformOpenFreeMapView> {
   }
 
   void _updateRoute() {
+    debugPrint('>>> [DART] _updateRoute called: ${widget.routeWaypoints?.length} waypoints');
     if (widget.routeWaypoints == null || widget.routeWaypoints!.isEmpty) {
       _callJs('clearRoute', [_mapId]);
       return;
@@ -249,6 +299,19 @@ class _PlatformOpenFreeMapViewState extends State<PlatformOpenFreeMapView> {
     _callJs('drawRoute', [
       _mapId,
       js.JsObject.jsify(coords),
+    ]);
+  }
+
+  void _fitIfNeeded() {
+    final incident = widget.incidentLocation;
+    final ambulance = widget.ambulanceLocation;
+    if (incident == null || ambulance == null) return;
+    _callJs('fitBounds', [
+      _mapId,
+      incident.latitude,
+      incident.longitude,
+      ambulance.latitude,
+      ambulance.longitude,
     ]);
   }
 
@@ -265,19 +328,6 @@ class _PlatformOpenFreeMapViewState extends State<PlatformOpenFreeMapView> {
       _mapId,
       widget.style.url,
       widget.style.has3d,
-    ]);
-  }
-
-  void _fitIfNeeded() {
-    final incident = widget.incidentLocation;
-    final ambulance = widget.ambulanceLocation;
-    if (incident == null || ambulance == null) return;
-    _callJs('fitBounds', [
-      _mapId,
-      incident.latitude,
-      incident.longitude,
-      ambulance.latitude,
-      ambulance.longitude,
     ]);
   }
 
@@ -300,24 +350,40 @@ class _PlatformOpenFreeMapViewState extends State<PlatformOpenFreeMapView> {
 
     final isRecenter = oldWidget.recenterTrigger != widget.recenterTrigger;
     final isInitial = oldWidget.incidentLocation == null && widget.incidentLocation != null;
+    final isLocationShift = (oldWidget.incidentLocation != null &&
+        widget.incidentLocation != null &&
+        (oldWidget.incidentLocation!.latitude - widget.incidentLocation!.latitude).abs() > 0.005);
+
+    if (oldWidget.userLocation?.latitude != widget.userLocation?.latitude ||
+        oldWidget.userLocation?.longitude != widget.userLocation?.longitude) {
+      _updateUserLocation();
+    }
 
     if (oldWidget.incidentLocation?.latitude != widget.incidentLocation?.latitude ||
         oldWidget.incidentLocation?.longitude != widget.incidentLocation?.longitude ||
         isRecenter) {
-      _updateIncident(fly: isRecenter || isInitial);
+      _updateIncident(fly: isRecenter || isInitial || isLocationShift);
     }
 
     if (oldWidget.ambulanceLocation != widget.ambulanceLocation ||
         oldWidget.heading != widget.heading ||
         oldWidget.ambulanceId != widget.ambulanceId) {
       _updateAmbulance();
-      if (widget.ambulanceLocation != null &&
-          oldWidget.ambulanceLocation == null) {
+      if (widget.ambulanceLocation != null && oldWidget.ambulanceLocation == null) {
         _fitIfNeeded();
       }
     }
 
-    if (oldWidget.routeWaypoints != widget.routeWaypoints) {
+    final bool routeChanged = oldWidget.routeWaypoints != widget.routeWaypoints ||
+        oldWidget.routeWaypoints?.length != widget.routeWaypoints?.length ||
+        (oldWidget.routeWaypoints != null &&
+            widget.routeWaypoints != null &&
+            oldWidget.routeWaypoints!.isNotEmpty &&
+            widget.routeWaypoints!.isNotEmpty &&
+            (oldWidget.routeWaypoints!.last.latitude != widget.routeWaypoints!.last.latitude ||
+                oldWidget.routeWaypoints!.last.longitude != widget.routeWaypoints!.last.longitude));
+
+    if (routeChanged) {
       _updateRoute();
     }
 

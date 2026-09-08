@@ -372,11 +372,11 @@ class RequestStatusScreen extends StatelessWidget {
                       height: 52,
                       child: ElevatedButton.icon(
                         onPressed: () {
-                          Navigator.pushNamed(context, RoutePaths.liveTracking);
+                          Navigator.pushNamedAndRemoveUntil(context, RoutePaths.home, (route) => false);
                         },
                         icon: const Icon(Icons.map_rounded, size: 20),
                         label: const Text(
-                          'OPEN LIVE MAP TRACKING',
+                          'VIEW DISPATCH ON MAP',
                           style: TextStyle(fontSize: 14, fontWeight: FontWeight.w900, letterSpacing: 0.6),
                         ),
                         style: ElevatedButton.styleFrom(

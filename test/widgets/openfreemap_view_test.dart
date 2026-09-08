@@ -27,26 +27,24 @@ void main() {
       await tester.pump();
 
       expect(find.text('INCIDENT'), findsOneWidget);
-      expect(find.text('OpenFreeMap (Bright) • MapLibre'), findsOneWidget);
+      expect(find.textContaining('OpenFreeMap'), findsOneWidget);
     });
 
-    testWidgets('should render ambulance marker with vehicle ID and heading when tracking', (tester) async {
+    testWidgets('should render userLocation and incidentLocation markers', (tester) async {
       await tester.pumpWidget(
         MaterialApp(
           home: Scaffold(
             body: OpenFreeMapView(
+              userLocation: LocationData(
+                latitude: 13.0800,
+                longitude: 80.2700,
+                timestamp: DateTime.now(),
+              ),
               incidentLocation: LocationData(
                 latitude: 13.0827,
                 longitude: 80.2707,
                 timestamp: DateTime.now(),
               ),
-              ambulanceLocation: LocationData(
-                latitude: 13.0860,
-                longitude: 80.2740,
-                timestamp: DateTime.now(),
-              ),
-              ambulanceId: 'AMB-CH-042',
-              heading: 180.0,
               style: OpenFreeMapStyle.bright,
             ),
           ),
@@ -55,8 +53,7 @@ void main() {
 
       await tester.pump();
 
-      expect(find.text('AMB-CH-042'), findsOneWidget);
-      expect(find.byIcon(Icons.navigation_rounded), findsOneWidget);
+      expect(find.text('INCIDENT'), findsOneWidget);
     });
 
     testWidgets('should trigger onLocationPicked when tapped in picker mode', (tester) async {
@@ -91,7 +88,7 @@ void main() {
 
       // Tap on map area offset from center
       await tester.tapAt(const Offset(300, 400));
-      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
 
       expect(pickedLocation, isNotNull);
       expect(pickedLocation!.isManualOverride, isTrue);

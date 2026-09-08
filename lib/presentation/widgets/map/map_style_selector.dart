@@ -56,74 +56,92 @@ class MapStyleSelector extends StatelessWidget {
     final isDesktop = MediaQuery.of(context).size.width >= 768;
 
     if (isEmbedded) {
-      return Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            padding: const EdgeInsets.all(7),
-            decoration: BoxDecoration(
-              color: AppColors.emergencyRed.withValues(alpha: 0.12),
-              shape: BoxShape.circle,
-            ),
-            child: const Icon(
-              Icons.layers_rounded,
-              color: AppColors.emergencyRed,
-              size: 18,
+      return Theme(
+        data: theme.copyWith(
+          splashColor: Colors.transparent,
+          highlightColor: Colors.transparent,
+        ),
+        child: PopupMenuButton<OpenFreeMapStyle>(
+          initialValue: currentStyle,
+          tooltip: 'Select Map Vector Style',
+          offset: const Offset(0, 42),
+          elevation: 8,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: BorderSide(
+              color: isDark ? Colors.white.withValues(alpha: 0.12) : Colors.black.withValues(alpha: 0.08),
             ),
           ),
-          const SizedBox(width: 8),
-          ...OpenFreeMapStyle.values.map((style) {
-            final isSelected = style == currentStyle;
-            final label = _getStyleLabel(style);
-            final icon = _getStyleIcon(style);
-
-            return Padding(
-              padding: const EdgeInsets.only(right: 6),
-              child: InkWell(
-                onTap: () => onStyleSelected(style),
-                borderRadius: BorderRadius.circular(16),
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 180),
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-                  decoration: BoxDecoration(
-                    color: isSelected
-                        ? AppColors.emergencyRed
-                        : (isDark ? Colors.white.withValues(alpha: 0.08) : Colors.black.withValues(alpha: 0.05)),
-                    borderRadius: BorderRadius.circular(16),
-                    boxShadow: isSelected
-                        ? [
-                            BoxShadow(
-                              color: AppColors.emergencyRed.withValues(alpha: 0.35),
-                              blurRadius: 6,
-                              offset: const Offset(0, 2),
-                            ),
-                          ]
-                        : null,
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        icon,
-                        size: 15,
-                        color: isSelected ? Colors.white : (isDark ? Colors.white70 : Colors.black54),
+          color: isDark ? const Color(0xFF1E293B) : Colors.white,
+          onSelected: onStyleSelected,
+          itemBuilder: (context) {
+            return OpenFreeMapStyle.values.map((style) {
+              final isSelected = style == currentStyle;
+              return PopupMenuItem<OpenFreeMapStyle>(
+                value: style,
+                height: 40,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      _getStyleIcon(style),
+                      size: 17,
+                      color: isSelected ? AppColors.emergencyRed : (isDark ? Colors.white70 : Colors.black87),
+                    ),
+                    const SizedBox(width: 10),
+                    Text(
+                      _getStyleLabel(style),
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: isSelected ? FontWeight.w900 : FontWeight.w600,
+                        color: isSelected ? AppColors.emergencyRed : (isDark ? Colors.white : Colors.black87),
                       ),
-                      const SizedBox(width: 5),
-                      Text(
-                        label,
-                        style: TextStyle(
-                          color: isSelected ? Colors.white : (isDark ? Colors.white70 : Colors.black87),
-                          fontSize: 12.5,
-                          fontWeight: isSelected ? FontWeight.w900 : FontWeight.w700,
-                        ),
-                      ),
+                    ),
+                    if (isSelected) ...[
+                      const SizedBox(width: 8),
+                      const Icon(Icons.check_rounded, size: 16, color: AppColors.emergencyRed),
                     ],
+                  ],
+                ),
+              );
+            }).toList();
+          },
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+            decoration: BoxDecoration(
+              color: isDark ? Colors.white.withValues(alpha: 0.08) : Colors.black.withValues(alpha: 0.05),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(
+                color: isDark ? Colors.white.withValues(alpha: 0.12) : Colors.black.withValues(alpha: 0.08),
+              ),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  _getStyleIcon(currentStyle),
+                  size: 16,
+                  color: AppColors.emergencyRed,
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  _getStyleLabel(currentStyle),
+                  style: TextStyle(
+                    color: isDark ? Colors.white : Colors.black87,
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w800,
                   ),
                 ),
-              ),
-            );
-          }),
-        ],
+                const SizedBox(width: 4),
+                Icon(
+                  Icons.arrow_drop_down_rounded,
+                  size: 18,
+                  color: isDark ? Colors.white70 : Colors.black54,
+                ),
+              ],
+            ),
+          ),
+        ),
       );
     }
 

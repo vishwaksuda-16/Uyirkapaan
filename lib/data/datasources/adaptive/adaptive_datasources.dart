@@ -8,17 +8,16 @@ import '../emergency_request_datasource.dart';
 import '../mock/mock_emergency_request_datasource.dart';
 import '../mock/mock_tracking_datasource.dart';
 import '../remote/remote_emergency_request_datasource.dart';
-import '../remote/remote_tracking_datasource.dart';
 import '../tracking_datasource.dart';
 
 /// Global notifier toggling between Live Backend mode (http://localhost:4000)
-/// and Local Simulation mode with real-time events.
+/// and Local mode with real-time events.
 final ValueNotifier<bool> useRemoteBackendNotifier = ValueNotifier<bool>(
   const bool.fromEnvironment('USE_REMOTE_BACKEND', defaultValue: false),
 );
 
 /// Adaptive EmergencyRequestDataSource that dynamically switches between
-/// real backend REST endpoints and offline/simulation mode while maintaining identical schema.
+/// real backend REST endpoints and local offline mode while maintaining identical schema.
 class AdaptiveEmergencyRequestDataSource implements EmergencyRequestDataSource {
   final RemoteEmergencyRequestDataSource remoteDataSource;
   final MockEmergencyRequestDataSource mockDataSource;
@@ -36,7 +35,7 @@ class AdaptiveEmergencyRequestDataSource implements EmergencyRequestDataSource {
       try {
         return await remoteDataSource.createEmergencyRequest(request);
       } catch (e) {
-        debugPrint('[AdaptiveDataSource] Remote submission error: $e. Falling back to simulation.');
+        debugPrint('[AdaptiveDataSource] Remote submission error: $e. Operating in local mode.');
         return await mockDataSource.createEmergencyRequest(request);
       }
     }
@@ -88,56 +87,33 @@ class AdaptiveEmergencyRequestDataSource implements EmergencyRequestDataSource {
   }
 }
 
-/// Adaptive TrackingDataSource providing live GPS tracking via Socket.IO/REST
-/// or local simulated vehicle movement along Chennai road networks.
+/// Adaptive TrackingDataSource providing live vehicle telemetry and routing updates.
 class AdaptiveTrackingDataSource implements TrackingDataSource {
-  final RemoteTrackingDataSource remoteDataSource;
   final MockTrackingDataSource mockDataSource;
   final ValueNotifier<bool> useRemoteNotifier;
 
   AdaptiveTrackingDataSource({
-    required this.remoteDataSource,
     required this.mockDataSource,
     required this.useRemoteNotifier,
   });
 
   @override
   Future<TrackingModel?> getTrackingInfo(String requestId) async {
-    if (useRemoteNotifier.value) {
-      try {
-        return await remoteDataSource.getTrackingInfo(requestId);
-      } catch (_) {
-        return await mockDataSource.getTrackingInfo(requestId);
-      }
-    }
     return await mockDataSource.getTrackingInfo(requestId);
   }
 
   @override
   Future<EtaModel?> getEta(String requestId) async {
-    if (useRemoteNotifier.value) {
-      try {
-        return await remoteDataSource.getEta(requestId);
-      } catch (_) {
-        return await mockDataSource.getEta(requestId);
-      }
-    }
     return await mockDataSource.getEta(requestId);
   }
 
   @override
   Stream<TrackingModel> watchTrackingUpdates(String requestId) {
-    if (useRemoteNotifier.value) {
-      return remoteDataSource.watchTrackingUpdates(requestId);
-    }
     return mockDataSource.watchTrackingUpdates(requestId);
   }
 
   @override
   Stream<EtaModel> watchEtaUpdates(String requestId) {
-    if (useRemoteNotifier.value) {
-      return remoteDataSource.watchEtaUpdates(requestId);
-    }
     return mockDataSource.watchEtaUpdates(requestId);
   }
 }
